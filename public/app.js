@@ -1,3 +1,5 @@
+import { createSplitUnits, estimateSpeechProgressRatio, splitText } from "./subtitle-text.js";
+
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
 const projectInput = document.querySelector("#projectInput");
@@ -123,19 +125,15 @@ addSegmentButton.addEventListener("click", () => {
   const endLimit = nextSegment ? Math.max(start + 0.3, nextSegment.start - 0.05) : getMediaDuration();
   const end = Math.max(start + 0.3, Math.min(start + 2, endLimit));
 
-  pushUndoSnapshot("新增字幕段");
-  segments.push({
-    id: crypto.randomUUID(),
-    index: segments.length + 1,
-    start,
-    end,
-    text: "新增字幕",
+  commitSegmentChange("新增字幕段", () => {
+    segments.push({
+      id: crypto.randomUUID(),
+      index: segments.length + 1,
+      start,
+      end,
+      text: "新增字幕",
+    });
   });
-  normalizeSegmentOrder();
-  enableOutputControls();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
   setStatus(`已在 ${formatClock(start)} 新增字幕段。`);
 });
 
@@ -168,15 +166,11 @@ transcribeButton.addEventListener("click", async () => {
   try {
     const payload = await transcribeWithProgress(selectedFile);
 
-    pushUndoSnapshot("產生字幕");
-    segments = payload.segments.map((segment) => ({ ...segment }));
-    normalizeSegmentOrder();
+    commitSegmentChange("產生字幕", () => {
+      segments = payload.segments.map((segment) => ({ ...segment }));
+    });
     setProgress("完成", 100);
     setStatus(`完成：產生 ${segments.length} 段字幕。`);
-    enableOutputControls();
-    saveProjectNow();
-    renderSegments();
-    updateActiveCaption();
   } catch (error) {
     console.error(error);
     setStatus(error instanceof Error ? error.message : String(error), true);
@@ -190,15 +184,11 @@ demoButton.addEventListener("click", () => {
   if (!selectedFile) return;
 
   const duration = Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : 20;
-  pushUndoSnapshot("載入測試字幕");
-  segments = createDemoSegments(Math.min(duration, 20));
-  normalizeSegmentOrder();
+  commitSegmentChange("載入測試字幕", () => {
+    segments = createDemoSegments(Math.min(duration, 20));
+  });
   setProgress("測試字幕已載入", 100);
   setStatus(`已載入 ${segments.length} 段測試字幕，不會消耗 OpenAI 用量。`);
-  enableOutputControls();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
 });
 
 importProjectButton.addEventListener("click", () => {
@@ -218,13 +208,9 @@ projectInput.addEventListener("change", async () => {
       if (!shouldImport) return;
     }
 
-    pushUndoSnapshot("匯入專案");
-    segments = project.segments;
-    normalizeSegmentOrder();
-    enableOutputControls();
-    saveProjectNow();
-    renderSegments();
-    updateActiveCaption();
+    commitSegmentChange("匯入專案", () => {
+      segments = project.segments;
+    });
     setProgress("專案已匯入", 100);
     setStatus(`已匯入 ${segments.length} 段字幕專案。`);
   } catch (error) {
@@ -311,21 +297,25 @@ function renderSegments() {
     const startInput = createTimeInput(segment.start, (value) => {
       const nextStart = clampTime(value, 0, segment.end);
       if (nextStart === segment.start) return;
-      pushUndoSnapshot("修改開始時間");
-      segment.start = nextStart;
-      scheduleSaveProject();
-      renderSegments();
-      updateActiveCaption();
+      commitSegmentChange(
+        "修改開始時間",
+        () => {
+          segment.start = nextStart;
+        },
+        { save: "schedule" },
+      );
     });
 
     const endInput = createTimeInput(segment.end, (value) => {
       const nextEnd = Math.max(value, segment.start);
       if (nextEnd === segment.end) return;
-      pushUndoSnapshot("修改結束時間");
-      segment.end = nextEnd;
-      scheduleSaveProject();
-      renderSegments();
-      updateActiveCaption();
+      commitSegmentChange(
+        "修改結束時間",
+        () => {
+          segment.end = nextEnd;
+        },
+        { save: "schedule" },
+      );
     });
 
     timeBox.append(jumpButton, startInput, endInput);
@@ -339,11 +329,7 @@ function renderSegments() {
       textEditSnapshotTaken = false;
     });
     textarea.addEventListener("input", () => {
-      if (!textEditSnapshotTaken || textEditSnapshotSegmentId !== segment.id) {
-        pushUndoSnapshot("修改文字");
-        textEditSnapshotSegmentId = segment.id;
-        textEditSnapshotTaken = true;
-      }
+      recordTextEditSnapshot(segment.id);
       segment.text = textarea.value;
       scheduleSaveProject();
       updateActiveCaption();
@@ -385,12 +371,9 @@ function renderSegments() {
     deleteButton.type = "button";
     deleteButton.textContent = "刪除";
     deleteButton.addEventListener("click", () => {
-      pushUndoSnapshot("刪除字幕段");
-      segments = segments.filter((candidate) => candidate.id !== segment.id);
-      renderSegments();
-      updateActiveCaption();
-      enableOutputControls();
-      saveProjectNow();
+      commitSegmentChange("刪除字幕段", () => {
+        segments = segments.filter((candidate) => candidate.id !== segment.id);
+      });
     });
 
     actions.append(nudgeBackButton, nudgeForwardButton, splitButton, mergeButton, deleteButton);
@@ -507,49 +490,6 @@ function createSplitGuide(segment) {
   return guide;
 }
 
-function createSplitUnits(text) {
-  const characters = Array.from(text.trim());
-  const units = [];
-  let index = 0;
-
-  while (index < characters.length) {
-    const character = characters[index];
-    const start = index;
-
-    if (isWhitespace(character)) {
-      let value = character;
-      index += 1;
-      while (index < characters.length && isWhitespace(characters[index])) {
-        value += characters[index];
-        index += 1;
-      }
-      units.push({ text: value, start, canSplit: false, className: "is-space" });
-      continue;
-    }
-
-    if (isAsciiWordCharacter(character)) {
-      let value = character;
-      index += 1;
-      while (index < characters.length && isAsciiWordCharacter(characters[index])) {
-        value += characters[index];
-        index += 1;
-      }
-      units.push({ text: value, start, canSplit: start > 0, className: start === 0 ? "is-leading" : "" });
-      continue;
-    }
-
-    index += 1;
-    units.push({
-      text: character,
-      start,
-      canSplit: start > 0 && !isPunctuation(character),
-      className: start === 0 ? "is-leading" : isPunctuation(character) ? "is-punctuation" : "",
-    });
-  }
-
-  return units;
-}
-
 function splitSegment(segmentId) {
   const index = segments.findIndex((segment) => segment.id === segmentId);
   if (index === -1) return;
@@ -569,27 +509,24 @@ function splitSegment(segmentId) {
       ? playhead
       : clampTime(inferredSplitAt, segment.start + 0.2, segment.end - 0.2);
 
-  pushUndoSnapshot("拆分字幕段");
-  segments.splice(
-    index,
-    1,
-    {
-      ...segment,
-      end: splitAt,
-      text: firstText,
-    },
-    {
-      id: crypto.randomUUID(),
-      index: segment.index + 1,
-      start: splitAt,
-      end: segment.end,
-      text: secondText,
-    },
-  );
-  normalizeSegmentOrder();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
+  commitSegmentChange("拆分字幕段", () => {
+    segments.splice(
+      index,
+      1,
+      {
+        ...segment,
+        end: splitAt,
+        text: firstText,
+      },
+      {
+        id: crypto.randomUUID(),
+        index: segment.index + 1,
+        start: splitAt,
+        end: segment.end,
+        text: secondText,
+      },
+    );
+  });
   setStatus(`已在 ${formatClock(splitAt)} 拆分字幕段。`);
 }
 
@@ -615,82 +552,25 @@ function splitSegmentAtTextIndex(segmentId, characterIndex) {
   const firstText = characters.slice(0, characterIndex).join("").trim();
   const secondText = characters.slice(characterIndex).join("").trim();
 
-  pushUndoSnapshot("拆分字幕段");
-  segments.splice(
-    index,
-    1,
-    {
-      ...segment,
-      end: splitAt,
-      text: firstText,
-    },
-    {
-      id: crypto.randomUUID(),
-      index: segment.index + 1,
-      start: splitAt,
-      end: segment.end,
-      text: secondText,
-    },
-  );
-  normalizeSegmentOrder();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
+  commitSegmentChange("拆分字幕段", () => {
+    segments.splice(
+      index,
+      1,
+      {
+        ...segment,
+        end: splitAt,
+        text: firstText,
+      },
+      {
+        id: crypto.randomUUID(),
+        index: segment.index + 1,
+        start: splitAt,
+        end: segment.end,
+        text: secondText,
+      },
+    );
+  });
   setStatus("已從點選文字前拆分字幕段，點選的文字已移到下一段。");
-}
-
-function estimateSpeechProgressRatio(text, splitIndex) {
-  const units = createSpeechWeightUnits(text);
-  const totalWeight = units.reduce((sum, unit) => sum + unit.weight, 0);
-  if (totalWeight <= 0) return 0.5;
-
-  const elapsedWeight = units.reduce((sum, unit) => {
-    if (unit.end <= splitIndex) return sum + unit.weight;
-    if (unit.start >= splitIndex) return sum;
-
-    const partialRatio = (splitIndex - unit.start) / Math.max(1, unit.end - unit.start);
-    return sum + unit.weight * partialRatio;
-  }, 0);
-
-  return clampTime(elapsedWeight / totalWeight, 0.08, 0.92);
-}
-
-function createSpeechWeightUnits(text) {
-  const characters = Array.from(text.trim());
-  const units = [];
-  let index = 0;
-
-  while (index < characters.length) {
-    const character = characters[index];
-    const start = index;
-
-    if (isWhitespace(character)) {
-      let length = 1;
-      index += 1;
-      while (index < characters.length && isWhitespace(characters[index])) {
-        length += 1;
-        index += 1;
-      }
-      units.push({ start, end: index, weight: 0.08 * length });
-      continue;
-    }
-
-    if (isAsciiWordCharacter(character)) {
-      let length = 1;
-      index += 1;
-      while (index < characters.length && isAsciiWordCharacter(characters[index])) {
-        length += 1;
-        index += 1;
-      }
-      units.push({ start, end: index, weight: Math.max(1.15, length * 0.22) });
-      continue;
-    }
-
-    index += 1;
-    units.push({ start, end: index, weight: isPunctuation(character) ? 0.18 : 1 });
-  }
-
-  return units;
 }
 
 function mergeWithNextSegment(segmentId) {
@@ -699,16 +579,13 @@ function mergeWithNextSegment(segmentId) {
 
   const current = segments[index];
   const next = segments[index + 1];
-  pushUndoSnapshot("合併字幕段");
-  segments.splice(index, 2, {
-    ...current,
-    end: Math.max(current.end, next.end),
-    text: [current.text.trim(), next.text.trim()].filter(Boolean).join(" "),
+  commitSegmentChange("合併字幕段", () => {
+    segments.splice(index, 2, {
+      ...current,
+      end: Math.max(current.end, next.end),
+      text: [current.text.trim(), next.text.trim()].filter(Boolean).join(" "),
+    });
   });
-  normalizeSegmentOrder();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
   setStatus("已合併下一段字幕。");
 }
 
@@ -722,13 +599,10 @@ function shiftSegment(segmentId, delta) {
     return;
   }
 
-  pushUndoSnapshot("微調單段時間");
-  segment.start += effectiveDelta;
-  segment.end += effectiveDelta;
-  normalizeSegmentOrder();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
+  commitSegmentChange("微調單段時間", () => {
+    segment.start += effectiveDelta;
+    segment.end += effectiveDelta;
+  });
   setStatus(`已${effectiveDelta > 0 ? "延後" : "提前"}這段字幕 ${Math.abs(effectiveDelta).toFixed(1)} 秒。`);
 }
 
@@ -742,44 +616,14 @@ function shiftAllSegments(delta) {
     return;
   }
 
-  pushUndoSnapshot("微調整體時間");
-  segments = segments.map((segment) => ({
-    ...segment,
-    start: segment.start + effectiveDelta,
-    end: segment.end + effectiveDelta,
-  }));
-  normalizeSegmentOrder();
-  saveProjectNow();
-  renderSegments();
-  updateActiveCaption();
+  commitSegmentChange("微調整體時間", () => {
+    segments = segments.map((segment) => ({
+      ...segment,
+      start: segment.start + effectiveDelta,
+      end: segment.end + effectiveDelta,
+    }));
+  });
   setStatus(`已整體${effectiveDelta > 0 ? "延後" : "提前"}字幕 ${Math.abs(effectiveDelta).toFixed(1)} 秒。`);
-}
-
-function splitText(text) {
-  const trimmed = text.trim();
-  if (trimmed.length < 2) return [trimmed, "新增字幕", 1];
-
-  const midpoint = Math.ceil(trimmed.length / 2);
-  const punctuation = ["，", "。", "、", "；", ",", ".", ";", " "];
-  const splitIndex = punctuation
-    .flatMap((mark) => [trimmed.indexOf(mark, Math.max(1, midpoint - 6)), trimmed.lastIndexOf(mark, midpoint + 6)])
-    .filter((index) => index > 0 && index < trimmed.length - 1)
-    .sort((left, right) => Math.abs(left - midpoint) - Math.abs(right - midpoint))[0];
-
-  const index = splitIndex ?? midpoint;
-  return [trimmed.slice(0, index + 1).trim(), trimmed.slice(index + 1).trim() || "新增字幕", index + 1];
-}
-
-function isWhitespace(character) {
-  return /\s/.test(character);
-}
-
-function isAsciiWordCharacter(character) {
-  return /^[A-Za-z0-9'-]$/.test(character);
-}
-
-function isPunctuation(character) {
-  return /^[，。、「」『』；：？！,.!?;:()[\]{}"“”‘’]$/.test(character);
 }
 
 function normalizeSegmentOrder() {
@@ -804,6 +648,30 @@ function enableOutputControls() {
   exportFormat.disabled = !hasSegments;
   exportProjectButton.disabled = !hasSegments;
   for (const button of shiftAllButtons) button.disabled = !hasSegments;
+}
+
+function commitSegmentChange(label, changeSegments, options = {}) {
+  pushUndoSnapshot(label);
+  changeSegments();
+  if (options.normalize !== false) normalizeSegmentOrder();
+  if (options.enableOutputControls !== false) enableOutputControls();
+
+  if (options.save === "schedule") {
+    scheduleSaveProject();
+  } else {
+    saveProjectNow();
+  }
+
+  if (options.render !== false) renderSegments();
+  if (options.updateCaption !== false) updateActiveCaption();
+}
+
+function recordTextEditSnapshot(segmentId) {
+  if (textEditSnapshotTaken && textEditSnapshotSegmentId === segmentId) return;
+
+  pushUndoSnapshot("修改文字");
+  textEditSnapshotSegmentId = segmentId;
+  textEditSnapshotTaken = true;
 }
 
 function pushUndoSnapshot(label) {
