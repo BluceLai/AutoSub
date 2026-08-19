@@ -24,21 +24,6 @@ export function estimateSpeechProgressRatio(text, splitIndex) {
   return clampRatio(elapsedWeight / totalWeight, 0.08, 0.92);
 }
 
-export function splitText(text) {
-  const trimmed = text.trim();
-  if (trimmed.length < 2) return [trimmed, "新增字幕", 1];
-
-  const midpoint = Math.ceil(trimmed.length / 2);
-  const punctuation = ["，", "。", "、", "；", ",", ".", ";", " "];
-  const splitIndex = punctuation
-    .flatMap((mark) => [trimmed.indexOf(mark, Math.max(1, midpoint - 6)), trimmed.lastIndexOf(mark, midpoint + 6)])
-    .filter((index) => index > 0 && index < trimmed.length - 1)
-    .sort((left, right) => Math.abs(left - midpoint) - Math.abs(right - midpoint))[0];
-
-  const index = splitIndex ?? midpoint;
-  return [trimmed.slice(0, index + 1).trim(), trimmed.slice(index + 1).trim() || "新增字幕", index + 1];
-}
-
 function tokenizeText(text) {
   const characters = Array.from(text.trim());
   const units = [];

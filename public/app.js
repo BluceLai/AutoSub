@@ -1,5 +1,12 @@
-import { createSplitUnits, estimateSpeechProgressRatio, splitText } from "./subtitle-text.js";
+import { createSplitUnits, estimateSpeechProgressRatio } from "./subtitle-text.js";
 import { getSubtitleQualityIssues } from "./subtitle-quality.js";
+import {
+  clampSegmentEnd as clampTimelineSegmentEnd,
+  clampSegmentShift as clampTimelineSegmentShift,
+  clampSegmentStart as clampTimelineSegmentStart,
+  enforceNonOverlappingSegments,
+  getWheelTimeDelta,
+} from "./subtitle-timing.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -69,7 +76,7 @@ window.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (event.key === "Control") {
+  if (event.key === "Control" && !isEditableTarget(event.target)) {
     setSplitMode(true);
   }
 });
@@ -100,6 +107,7 @@ mediaInput.addEventListener("change", () => {
   if (savedProject) {
     segments = savedProject.segments;
   }
+  normalizeSegmentOrder();
 
   importProjectButton.disabled = false;
   addSegmentButton.disabled = false;
@@ -298,29 +306,25 @@ function renderSegments() {
       mediaPlayer.play().catch(() => {});
     });
 
-    const startInput = createTimeInput(segment.start, (value) => {
-      const nextStart = clampTime(value, 0, segment.end);
-      if (nextStart === segment.start) return;
-      commitSegmentChange(
-        "修改開始時間",
-        () => {
-          segment.start = nextStart;
-        },
-        { save: "schedule" },
-      );
-    });
+    const startInput = createTimeInput(
+      segment.start,
+      (value) => {
+        changeSegmentStart(segment.id, value);
+      },
+      (delta) => {
+        changeSegmentStart(segment.id, segment.start + delta);
+      },
+    );
 
-    const endInput = createTimeInput(segment.end, (value) => {
-      const nextEnd = Math.max(value, segment.start);
-      if (nextEnd === segment.end) return;
-      commitSegmentChange(
-        "修改結束時間",
-        () => {
-          segment.end = nextEnd;
-        },
-        { save: "schedule" },
-      );
-    });
+    const endInput = createTimeInput(
+      segment.end,
+      (value) => {
+        changeSegmentEnd(segment.id, value);
+      },
+      (delta) => {
+        changeSegmentEnd(segment.id, segment.end + delta);
+      },
+    );
 
     timeBox.append(jumpButton, startInput, endInput);
 
@@ -351,20 +355,20 @@ function renderSegments() {
     tools.className = "segment-tools";
 
     const duration = document.createElement("span");
+    duration.className = "segment-duration";
     duration.textContent = `${formatDuration(segment.end - segment.start)}`;
-    if (segment.end <= segment.start) duration.className = "warning";
+    duration.title = "滑鼠滾輪調整這段字幕長度，每格 0.1 秒";
+    duration.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      changeSegmentEnd(segment.id, segment.end + getWheelTimeDelta(event.deltaY));
+    });
+    if (segment.end <= segment.start) duration.classList.add("warning");
 
     const actions = document.createElement("div");
     actions.className = "segment-actions";
 
     const nudgeBackButton = createNudgeButton("-0.1s", segment.id, -0.1);
     const nudgeForwardButton = createNudgeButton("+0.1s", segment.id, 0.1);
-
-    const splitButton = document.createElement("button");
-    splitButton.type = "button";
-    splitButton.textContent = "拆分";
-    splitButton.disabled = segment.end - segment.start < 0.6;
-    splitButton.addEventListener("click", () => splitSegment(segment.id));
 
     const mergeButton = document.createElement("button");
     mergeButton.type = "button";
@@ -381,7 +385,7 @@ function renderSegments() {
       });
     });
 
-    actions.append(nudgeBackButton, nudgeForwardButton, splitButton, mergeButton, deleteButton);
+    actions.append(nudgeBackButton, nudgeForwardButton, mergeButton, deleteButton);
     tools.append(duration, actions);
     contentBox.append(textarea, splitGuide, tools);
     item.append(timeBox, contentBox);
@@ -392,12 +396,91 @@ function renderSegments() {
   renderQualityIssues();
 }
 
-function createTimeInput(value, onChange) {
+function changeSegmentStart(segmentId, value, options = {}) {
+  const segment = segments.find((candidate) => candidate.id === segmentId);
+  if (!segment) return;
+
+  const nextStart = clampSegmentStart(segmentId, value);
+  const wasClamped = Math.abs(nextStart - value) > 0.0001;
+  if (nextStart === segment.start) {
+    if (wasClamped) {
+      renderSegments();
+      setStatus("開始時間已自動限制，不能早於上一段結束或越過本段結束。", true);
+    }
+    return;
+  }
+  commitSegmentChange(
+    "修改開始時間",
+    () => {
+      segment.start = nextStart;
+    },
+    { save: options.save ?? "schedule" },
+  );
+  if (wasClamped) setStatus("開始時間已自動限制，不能早於上一段結束或越過本段結束。", true);
+}
+
+function changeSegmentEnd(segmentId, value, options = {}) {
+  const segment = segments.find((candidate) => candidate.id === segmentId);
+  if (!segment) return;
+
+  const nextEnd = clampSegmentEnd(segmentId, value);
+  const wasClamped = Math.abs(nextEnd - value) > 0.0001;
+  if (nextEnd === segment.end) {
+    if (wasClamped) {
+      renderSegments();
+      setStatus("結束時間已自動限制，不能超過下一段開始。", true);
+    }
+    return;
+  }
+  commitSegmentChange(
+    "修改結束時間",
+    () => {
+      segment.end = nextEnd;
+    },
+    { save: options.save ?? "schedule" },
+  );
+  if (wasClamped) setStatus("結束時間已自動限制，不能超過下一段開始。", true);
+}
+
+function clampSegmentStart(segmentId, value) {
+  return clampTimelineSegmentStart(segments, segmentId, value);
+}
+
+function clampSegmentEnd(segmentId, value) {
+  return clampTimelineSegmentEnd(segments, segmentId, value);
+}
+
+function clampSegmentShift(segmentId, delta) {
+  return clampTimelineSegmentShift(segments, segmentId, delta);
+}
+
+function createTimeInput(value, onChange, onWheel) {
   const input = document.createElement("input");
   input.className = "time-input";
   input.value = formatClock(value);
   input.inputMode = "decimal";
-  input.addEventListener("change", () => onChange(parseTime(input.value)));
+  let lastCommittedValue = input.value;
+  const commitValue = () => {
+    if (input.value === lastCommittedValue) return;
+    lastCommittedValue = input.value;
+    onChange(parseTime(input.value));
+  };
+
+  input.addEventListener("change", commitValue);
+  input.addEventListener("blur", commitValue);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+
+    event.preventDefault();
+    commitValue();
+  });
+  if (onWheel) {
+    input.title = "滑鼠滾輪調整時間，每格 0.1 秒";
+    input.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      onWheel(getWheelTimeDelta(event.deltaY));
+    });
+  }
   return input;
 }
 
@@ -544,46 +627,6 @@ function createSplitGuide(segment) {
   return guide;
 }
 
-function splitSegment(segmentId) {
-  const index = segments.findIndex((segment) => segment.id === segmentId);
-  if (index === -1) return;
-
-  const segment = segments[index];
-  const duration = segment.end - segment.start;
-  if (duration < 0.6) {
-    setStatus("這段太短，至少需要 0.6 秒才能拆分。", true);
-    return;
-  }
-
-  const playhead = mediaPlayer.currentTime || 0;
-  const [firstText, secondText, secondTextStartIndex] = splitText(segment.text);
-  const inferredSplitAt = segment.start + duration * estimateSpeechProgressRatio(segment.text, secondTextStartIndex);
-  const splitAt =
-    playhead > segment.start + 0.2 && playhead < segment.end - 0.2
-      ? playhead
-      : clampTime(inferredSplitAt, segment.start + 0.2, segment.end - 0.2);
-
-  commitSegmentChange("拆分字幕段", () => {
-    segments.splice(
-      index,
-      1,
-      {
-        ...segment,
-        end: splitAt,
-        text: firstText,
-      },
-      {
-        id: crypto.randomUUID(),
-        index: segment.index + 1,
-        start: splitAt,
-        end: segment.end,
-        text: secondText,
-      },
-    );
-  });
-  setStatus(`已在 ${formatClock(splitAt)} 拆分字幕段。`);
-}
-
 function splitSegmentAtTextIndex(segmentId, characterIndex) {
   const index = segments.findIndex((segment) => segment.id === segmentId);
   if (index === -1) return;
@@ -647,9 +690,9 @@ function shiftSegment(segmentId, delta) {
   const segment = segments.find((candidate) => candidate.id === segmentId);
   if (!segment) return;
 
-  const effectiveDelta = Math.max(delta, -segment.start);
+  const effectiveDelta = clampSegmentShift(segmentId, delta);
   if (effectiveDelta === 0) {
-    setStatus("這段字幕已經在 0 秒，不能再往前。", true);
+    setStatus(delta > 0 ? "這段字幕已經貼近下一段，不能再往後。" : "這段字幕已經貼近上一段或 0 秒，不能再往前。", true);
     return;
   }
 
@@ -694,6 +737,8 @@ function normalizeSegmentOrder() {
       ...segment,
       index: index + 1,
     }));
+
+  enforceNonOverlappingSegments(segments);
 }
 
 function enableOutputControls() {

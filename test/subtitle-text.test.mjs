@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createSplitUnits, estimateSpeechProgressRatio, splitText } from "../public/subtitle-text.js";
+import { createSplitUnits, estimateSpeechProgressRatio } from "../public/subtitle-text.js";
 
 describe("subtitle text helpers", () => {
   it("creates clickable split units for Chinese characters and English words", () => {
@@ -34,11 +34,4 @@ describe("subtitle text helpers", () => {
     assert.ok(ratio < 0.2);
   });
 
-  it("returns the second text start index for default split button timing", () => {
-    const [firstText, secondText, secondTextStartIndex] = splitText("歡迎使用 AutoSub，這是不用 OpenAI 用量的測試字幕。");
-
-    assert.equal(firstText, "歡迎使用 AutoSub，這是不用");
-    assert.equal(secondText, "OpenAI 用量的測試字幕。");
-    assert.equal(secondTextStartIndex, 18);
-  });
 });

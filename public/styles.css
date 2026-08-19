@@ -516,6 +516,12 @@ video {
   font-variant-numeric: tabular-nums;
 }
 
+.time-input:hover,
+.segment-duration:hover {
+  border-color: var(--accent);
+  cursor: ns-resize;
+}
+
 .segment textarea {
   width: 100%;
   min-height: 72px;
@@ -610,6 +616,16 @@ body.is-split-mode .segment textarea {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+}
+
+.segment-duration {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 7px;
+  font-variant-numeric: tabular-nums;
 }
 
 .segment-actions {
