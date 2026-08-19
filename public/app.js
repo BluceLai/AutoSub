@@ -16,6 +16,7 @@ const captionOverlay = document.querySelector("#captionOverlay");
 const segmentsList = document.querySelector("#segmentsList");
 const emptyState = document.querySelector("#emptyState");
 const segmentCount = document.querySelector("#segmentCount");
+const addSegmentButton = document.querySelector("#addSegmentButton");
 const progressPanel = document.querySelector("#progressPanel");
 const progressLabel = document.querySelector("#progressLabel");
 const progressPercent = document.querySelector("#progressPercent");
@@ -51,6 +52,7 @@ mediaInput.addEventListener("change", () => {
   }
 
   importProjectButton.disabled = false;
+  addSegmentButton.disabled = false;
   exportProjectButton.disabled = segments.length === 0;
   demoButton.disabled = false;
   transcribeButton.disabled = !hasApiKey;
@@ -68,6 +70,29 @@ mediaInput.addEventListener("change", () => {
   updateActiveCaption();
 });
 
+addSegmentButton.addEventListener("click", () => {
+  if (!selectedFile) return;
+
+  const start = clampTime(mediaPlayer.currentTime || 0, 0, getMediaDuration());
+  const nextSegment = segments.find((segment) => segment.start > start);
+  const endLimit = nextSegment ? Math.max(start + 0.3, nextSegment.start - 0.05) : getMediaDuration();
+  const end = Math.max(start + 0.3, Math.min(start + 2, endLimit));
+
+  segments.push({
+    id: crypto.randomUUID(),
+    index: segments.length + 1,
+    start,
+    end,
+    text: "新增字幕",
+  });
+  normalizeSegmentOrder();
+  enableOutputControls();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  setStatus(`已在 ${formatClock(start)} 新增字幕段。`);
+});
+
 transcribeButton.addEventListener("click", async () => {
   if (!selectedFile) return;
 
@@ -81,11 +106,10 @@ transcribeButton.addEventListener("click", async () => {
     const payload = await transcribeWithProgress(selectedFile);
 
     segments = payload.segments.map((segment) => ({ ...segment }));
+    normalizeSegmentOrder();
     setProgress("完成", 100);
     setStatus(`完成：產生 ${segments.length} 段字幕。`);
-    exportButton.disabled = segments.length === 0;
-    exportFormat.disabled = segments.length === 0;
-    exportProjectButton.disabled = segments.length === 0;
+    enableOutputControls();
     saveProjectNow();
     renderSegments();
     updateActiveCaption();
@@ -103,11 +127,10 @@ demoButton.addEventListener("click", () => {
 
   const duration = Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : 20;
   segments = createDemoSegments(Math.min(duration, 20));
+  normalizeSegmentOrder();
   setProgress("測試字幕已載入", 100);
   setStatus(`已載入 ${segments.length} 段測試字幕，不會消耗 OpenAI 用量。`);
-  exportButton.disabled = false;
-  exportFormat.disabled = false;
-  exportProjectButton.disabled = false;
+  enableOutputControls();
   saveProjectNow();
   renderSegments();
   updateActiveCaption();
@@ -131,9 +154,8 @@ projectInput.addEventListener("change", async () => {
     }
 
     segments = project.segments;
-    exportButton.disabled = segments.length === 0;
-    exportFormat.disabled = segments.length === 0;
-    exportProjectButton.disabled = segments.length === 0;
+    normalizeSegmentOrder();
+    enableOutputControls();
     saveProjectNow();
     renderSegments();
     updateActiveCaption();
@@ -174,6 +196,7 @@ shutdownButton.addEventListener("click", async () => {
   demoButton.disabled = true;
   importProjectButton.disabled = true;
   exportProjectButton.disabled = true;
+  addSegmentButton.disabled = true;
   transcribeButton.disabled = true;
   exportButton.disabled = true;
   exportFormat.disabled = true;
@@ -200,6 +223,7 @@ function renderSegments() {
   segmentsList.innerHTML = "";
 
   for (const segment of segments) {
+    const segmentIndex = segments.findIndex((candidate) => candidate.id === segment.id);
     const item = document.createElement("li");
     item.className = "segment";
     item.dataset.id = segment.id;
@@ -247,6 +271,21 @@ function renderSegments() {
     duration.textContent = `${formatDuration(segment.end - segment.start)}`;
     if (segment.end <= segment.start) duration.className = "warning";
 
+    const actions = document.createElement("div");
+    actions.className = "segment-actions";
+
+    const splitButton = document.createElement("button");
+    splitButton.type = "button";
+    splitButton.textContent = "拆分";
+    splitButton.disabled = segment.end - segment.start < 0.6;
+    splitButton.addEventListener("click", () => splitSegment(segment.id));
+
+    const mergeButton = document.createElement("button");
+    mergeButton.type = "button";
+    mergeButton.textContent = "合併下段";
+    mergeButton.disabled = segmentIndex === segments.length - 1;
+    mergeButton.addEventListener("click", () => mergeWithNextSegment(segment.id));
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
     deleteButton.textContent = "刪除";
@@ -254,13 +293,12 @@ function renderSegments() {
       segments = segments.filter((candidate) => candidate.id !== segment.id);
       renderSegments();
       updateActiveCaption();
-      exportButton.disabled = segments.length === 0;
-      exportFormat.disabled = segments.length === 0;
-      exportProjectButton.disabled = segments.length === 0;
+      enableOutputControls();
       saveProjectNow();
     });
 
-    tools.append(duration, deleteButton);
+    actions.append(splitButton, mergeButton, deleteButton);
+    tools.append(duration, actions);
     contentBox.append(textarea, tools);
     item.append(timeBox, contentBox);
     segmentsList.append(item);
@@ -299,6 +337,107 @@ function setStatus(message, isWarning = false) {
 
 function setProjectStatus(message) {
   projectStatus.textContent = message;
+}
+
+function splitSegment(segmentId) {
+  const index = segments.findIndex((segment) => segment.id === segmentId);
+  if (index === -1) return;
+
+  const segment = segments[index];
+  const duration = segment.end - segment.start;
+  if (duration < 0.6) {
+    setStatus("這段太短，至少需要 0.6 秒才能拆分。", true);
+    return;
+  }
+
+  const playhead = mediaPlayer.currentTime || 0;
+  const splitAt =
+    playhead > segment.start + 0.2 && playhead < segment.end - 0.2 ? playhead : segment.start + duration / 2;
+  const [firstText, secondText] = splitText(segment.text);
+
+  segments.splice(
+    index,
+    1,
+    {
+      ...segment,
+      end: splitAt,
+      text: firstText,
+    },
+    {
+      id: crypto.randomUUID(),
+      index: segment.index + 1,
+      start: splitAt,
+      end: segment.end,
+      text: secondText,
+    },
+  );
+  normalizeSegmentOrder();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  setStatus(`已在 ${formatClock(splitAt)} 拆分字幕段。`);
+}
+
+function mergeWithNextSegment(segmentId) {
+  const index = segments.findIndex((segment) => segment.id === segmentId);
+  if (index === -1 || index >= segments.length - 1) return;
+
+  const current = segments[index];
+  const next = segments[index + 1];
+  segments.splice(index, 2, {
+    ...current,
+    end: Math.max(current.end, next.end),
+    text: [current.text.trim(), next.text.trim()].filter(Boolean).join(" "),
+  });
+  normalizeSegmentOrder();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  setStatus("已合併下一段字幕。");
+}
+
+function splitText(text) {
+  const trimmed = text.trim();
+  if (trimmed.length < 2) return [trimmed, "新增字幕"];
+
+  const midpoint = Math.ceil(trimmed.length / 2);
+  const punctuation = ["，", "。", "、", "；", ",", ".", ";", " "];
+  const splitIndex = punctuation
+    .flatMap((mark) => [trimmed.indexOf(mark, Math.max(1, midpoint - 6)), trimmed.lastIndexOf(mark, midpoint + 6)])
+    .filter((index) => index > 0 && index < trimmed.length - 1)
+    .sort((left, right) => Math.abs(left - midpoint) - Math.abs(right - midpoint))[0];
+
+  const index = splitIndex ?? midpoint;
+  return [trimmed.slice(0, index + 1).trim(), trimmed.slice(index + 1).trim() || "新增字幕"];
+}
+
+function normalizeSegmentOrder() {
+  segments = segments
+    .map((segment) => ({
+      ...segment,
+      id: segment.id || crypto.randomUUID(),
+      start: Math.max(0, Number(segment.start) || 0),
+      end: Math.max(Number(segment.end) || 0, Number(segment.start) || 0),
+      text: String(segment.text ?? ""),
+    }))
+    .sort((left, right) => left.start - right.start)
+    .map((segment, index) => ({
+      ...segment,
+      index: index + 1,
+    }));
+}
+
+function enableOutputControls() {
+  const hasSegments = segments.length > 0;
+  exportButton.disabled = !hasSegments;
+  exportFormat.disabled = !hasSegments;
+  exportProjectButton.disabled = !hasSegments;
+}
+
+function getMediaDuration() {
+  if (Number.isFinite(mediaPlayer.duration) && mediaPlayer.duration > 0) return mediaPlayer.duration;
+  const lastEnd = Math.max(0, ...segments.map((segment) => Number(segment.end) || 0));
+  return Math.max(lastEnd, (mediaPlayer.currentTime || 0) + 5, 20);
 }
 
 async function checkHealth() {
@@ -340,7 +479,13 @@ function scheduleSaveProject() {
 }
 
 function saveProjectNow() {
-  if (!selectedFile || !currentProjectKey || segments.length === 0) {
+  if (!selectedFile || !currentProjectKey) {
+    setProjectStatus("尚未建立字幕專案");
+    return;
+  }
+
+  if (segments.length === 0) {
+    localStorage.removeItem(currentProjectKey);
     setProjectStatus("尚未建立字幕專案");
     return;
   }

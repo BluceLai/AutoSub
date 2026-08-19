@@ -310,9 +310,26 @@ video {
   padding: 14px;
 }
 
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .panel-header h2 {
   margin: 0;
   font-size: 18px;
+}
+
+.mini-button {
+  min-height: 32px;
+  padding: 0 11px;
+  background: #315467;
+  font-size: 13px;
+}
+
+.mini-button:hover {
+  background: #253f4d;
 }
 
 #segmentCount {
@@ -393,9 +410,18 @@ video {
 
 .segment-tools {
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+}
+
+.segment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .warning {
