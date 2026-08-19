@@ -10,6 +10,7 @@ import {
 import { getSubtitleJumpTarget } from "./subtitle-navigation.js";
 import { getSubtitleInsertSlot } from "./subtitle-insert.js";
 import { parseSubtitleFile } from "./subtitle-file.js";
+import { findSubtitleMatches, replaceAllSubtitleMatches, replaceSubtitleMatch } from "./subtitle-search.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -35,6 +36,13 @@ const addSegmentButton = document.querySelector("#addSegmentButton");
 const followPlaybackInput = document.querySelector("#followPlaybackInput");
 const undoButton = document.querySelector("#undoButton");
 const redoButton = document.querySelector("#redoButton");
+const subtitleSearchInput = document.querySelector("#subtitleSearchInput");
+const subtitleReplaceInput = document.querySelector("#subtitleReplaceInput");
+const previousMatchButton = document.querySelector("#previousMatchButton");
+const nextMatchButton = document.querySelector("#nextMatchButton");
+const replaceMatchButton = document.querySelector("#replaceMatchButton");
+const replaceAllButton = document.querySelector("#replaceAllButton");
+const searchSummary = document.querySelector("#searchSummary");
 const shiftAllButtons = Array.from(document.querySelectorAll("[data-shift-all]"));
 const progressPanel = document.querySelector("#progressPanel");
 const progressLabel = document.querySelector("#progressLabel");
@@ -61,6 +69,8 @@ let textEditSnapshotTaken = false;
 let followPlayback = true;
 let isDraggingNewSegment = false;
 let addSegmentPointerStart = null;
+let searchMatches = [];
+let activeSearchMatchIndex = -1;
 
 checkHealth();
 
@@ -147,6 +157,7 @@ mediaInput.addEventListener("change", () => {
   exportButton.disabled = segments.length === 0;
   exportFormat.disabled = segments.length === 0;
   enableOutputControls();
+  updateSearchControls();
   hideProgress();
   if (savedProject) {
     setStatus(`已接回 ${file.name} 的本機字幕專案。`);
@@ -197,6 +208,12 @@ window.addEventListener("pointerup", (event) => {
 
 undoButton.addEventListener("click", undoLastAction);
 redoButton.addEventListener("click", redoLastAction);
+subtitleSearchInput.addEventListener("input", () => updateSubtitleSearch({ resetActive: true }));
+subtitleReplaceInput.addEventListener("input", updateSearchControls);
+previousMatchButton.addEventListener("click", () => moveSearchResult(-1));
+nextMatchButton.addEventListener("click", () => moveSearchResult(1));
+replaceMatchButton.addEventListener("click", replaceCurrentSearchMatch);
+replaceAllButton.addEventListener("click", replaceAllSearchMatches);
 
 followPlaybackInput.addEventListener("change", () => {
   followPlayback = followPlaybackInput.checked;
@@ -413,6 +430,7 @@ function renderSegments() {
       scheduleSaveProject();
       updateActiveCaption();
       renderQualityIssues();
+      updateSubtitleSearch({ jump: false });
     });
     textarea.addEventListener("blur", () => {
       if (textEditSnapshotSegmentId === segment.id) {
@@ -469,6 +487,7 @@ function renderSegments() {
   }
 
   markActiveSegment();
+  markSearchMatches();
   renderQualityIssues();
 }
 
@@ -637,6 +656,100 @@ function jumpToSegment(segmentId) {
   mediaPlayer.currentTime = Math.max(0, segment.start);
   activeSegmentId = segment.id;
   updateActiveCaption({ forceScroll: true });
+}
+
+function updateSubtitleSearch(options = {}) {
+  searchMatches = findSubtitleMatches(segments, subtitleSearchInput.value);
+  if (options.resetActive || activeSearchMatchIndex >= searchMatches.length) {
+    activeSearchMatchIndex = searchMatches.length > 0 ? 0 : -1;
+  }
+  updateSearchControls();
+  markSearchMatches();
+  if (options.jump !== false && activeSearchMatchIndex !== -1) {
+    jumpToSearchMatch(activeSearchMatchIndex);
+  }
+}
+
+function updateSearchControls() {
+  const hasSegments = segments.length > 0;
+  const hasQuery = subtitleSearchInput.value.trim().length > 0;
+  const hasMatches = searchMatches.length > 0;
+  subtitleSearchInput.disabled = !hasSegments;
+  subtitleReplaceInput.disabled = !hasSegments;
+  previousMatchButton.disabled = !hasMatches;
+  nextMatchButton.disabled = !hasMatches;
+  replaceMatchButton.disabled = !hasMatches;
+  replaceAllButton.disabled = !hasQuery || !hasMatches;
+
+  if (!hasQuery) {
+    searchSummary.textContent = "0 筆";
+  } else if (!hasMatches) {
+    searchSummary.textContent = "無結果";
+  } else {
+    searchSummary.textContent = `${activeSearchMatchIndex + 1} / ${searchMatches.length}`;
+  }
+}
+
+function moveSearchResult(direction) {
+  if (searchMatches.length === 0) return;
+
+  activeSearchMatchIndex = (activeSearchMatchIndex + direction + searchMatches.length) % searchMatches.length;
+  updateSearchControls();
+  markSearchMatches();
+  jumpToSearchMatch(activeSearchMatchIndex);
+}
+
+function jumpToSearchMatch(index) {
+  const match = searchMatches[index];
+  if (!match) return;
+
+  jumpToSegment(match.segmentId);
+  const item = getSegmentItem(match.segmentId);
+  const textarea = item?.querySelector("textarea");
+  textarea?.focus();
+  textarea?.setSelectionRange(match.start, match.end);
+}
+
+function replaceCurrentSearchMatch() {
+  const match = searchMatches[activeSearchMatchIndex];
+  if (!match) return;
+
+  commitSegmentChange("取代字幕文字", () => {
+    segments = replaceSubtitleMatch(segments, match, subtitleReplaceInput.value);
+  });
+  updateSubtitleSearch({ jump: true });
+  setStatus("已取代目前搜尋結果。");
+}
+
+function replaceAllSearchMatches() {
+  const query = subtitleSearchInput.value;
+  if (searchMatches.length === 0 || !query.trim()) return;
+
+  const replacedCount = searchMatches.length;
+  commitSegmentChange("全部取代字幕文字", () => {
+    segments = replaceAllSubtitleMatches(segments, query, subtitleReplaceInput.value);
+  });
+  updateSubtitleSearch({ resetActive: true, jump: false });
+  setStatus(`已全部取代 ${replacedCount} 筆搜尋結果。`);
+}
+
+function markSearchMatches() {
+  for (const item of segmentsList.querySelectorAll(".segment")) {
+    item.classList.remove("has-search-match", "is-search-active");
+  }
+
+  for (const match of searchMatches) {
+    getSegmentItem(match.segmentId)?.classList.add("has-search-match");
+  }
+
+  const activeMatch = searchMatches[activeSearchMatchIndex];
+  if (activeMatch) {
+    getSegmentItem(activeMatch.segmentId)?.classList.add("is-search-active");
+  }
+}
+
+function getSegmentItem(segmentId) {
+  return Array.from(segmentsList.querySelectorAll(".segment")).find((item) => item.dataset.id === segmentId) ?? null;
 }
 
 function jumpToAdjacentSubtitle(direction) {
@@ -943,6 +1056,7 @@ function enableOutputControls() {
   exportFormat.disabled = !hasSegments;
   exportProjectButton.disabled = !hasSegments;
   for (const button of shiftAllButtons) button.disabled = !hasSegments;
+  updateSearchControls();
 }
 
 function commitSegmentChange(label, changeSegments, options = {}) {
@@ -959,6 +1073,7 @@ function commitSegmentChange(label, changeSegments, options = {}) {
 
   if (options.render !== false) renderSegments();
   if (options.updateCaption !== false) updateActiveCaption();
+  if (options.search !== false) updateSubtitleSearch({ jump: false });
 }
 
 function recordTextEditSnapshot(segmentId) {
@@ -995,6 +1110,7 @@ function undoLastAction() {
   saveProjectNow();
   renderSegments();
   updateActiveCaption();
+  updateSubtitleSearch({ jump: false });
   updateHistoryButtons();
   setStatus(`已復原：${snapshot.label}`);
 }
@@ -1015,6 +1131,7 @@ function redoLastAction() {
   saveProjectNow();
   renderSegments();
   updateActiveCaption();
+  updateSubtitleSearch({ jump: false });
   updateHistoryButtons();
   setStatus(`已重做：${snapshot.label}`);
 }
