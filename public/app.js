@@ -7,6 +7,7 @@ import {
   enforceNonOverlappingSegments,
   getWheelTimeDelta,
 } from "./subtitle-timing.js";
+import { getSubtitleJumpTarget } from "./subtitle-navigation.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -58,28 +59,50 @@ let followPlayback = true;
 checkHealth();
 
 window.addEventListener("keydown", (event) => {
-  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "z" && !isEditableTarget(event.target)) {
+  if (isEditableTarget(event.target)) return;
+
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
     redoLastAction();
     return;
   }
 
-  if (event.ctrlKey && event.key.toLowerCase() === "z" && !isEditableTarget(event.target)) {
+  if (event.ctrlKey && event.key.toLowerCase() === "z") {
     event.preventDefault();
     undoLastAction();
     return;
   }
 
-  if (event.ctrlKey && event.key.toLowerCase() === "y" && !isEditableTarget(event.target)) {
+  if (event.ctrlKey && event.key.toLowerCase() === "y") {
     event.preventDefault();
     redoLastAction();
     return;
   }
 
-  if (event.key === "Control" && !isEditableTarget(event.target)) {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    jumpToAdjacentSubtitle("next");
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    jumpToAdjacentSubtitle("previous");
+    return;
+  }
+
+  if (event.key === " " || event.key === "Space" || event.key === "Spacebar") {
+    event.preventDefault();
+    if (event.repeat) return;
+
+    togglePlayback();
+    return;
+  }
+
+  if (event.key === "Control") {
     setSplitMode(true);
   }
-});
+}, { capture: true });
 
 window.addEventListener("keyup", (event) => {
   if (event.key === "Control") {
@@ -539,6 +562,48 @@ function jumpToSegment(segmentId) {
   mediaPlayer.currentTime = Math.max(0, segment.start);
   activeSegmentId = segment.id;
   updateActiveCaption({ forceScroll: true });
+}
+
+function jumpToAdjacentSubtitle(direction) {
+  if (segments.length === 0) {
+    setStatus("目前沒有字幕段可以跳轉。", true);
+    return;
+  }
+
+  updateActiveCaption();
+  const targetTime = getSubtitleJumpTarget(segments, mediaPlayer.currentTime || 0, direction, activeSegmentId);
+  if (targetTime === null) {
+    setStatus(direction === "next" ? "已經是最後一段字幕。" : "已經是第一段字幕。", true);
+    return;
+  }
+
+  const targetSegment = segments.find((segment) => segment.start === targetTime);
+  mediaPlayer.currentTime = Math.max(0, targetTime);
+  activeSegmentId = targetSegment?.id ?? null;
+  updateActiveCaption({ forceScroll: true });
+  setStatus(`已跳到${direction === "next" ? "下一段" : "上一段"}字幕 ${formatClock(targetTime)}。`);
+}
+
+function togglePlayback() {
+  if (!mediaPlayer.currentSrc && !mediaPlayer.src) {
+    setStatus("請先選擇影片或音訊檔。", true);
+    return;
+  }
+
+  if (mediaPlayer.paused || mediaPlayer.ended) {
+    mediaPlayer
+      .play()
+      .then(() => {
+        setStatus("開始播放。");
+      })
+      .catch(() => {
+        setStatus("無法開始播放，請先確認影片已載入。", true);
+      });
+    return;
+  }
+
+  mediaPlayer.pause();
+  setStatus("已暫停播放。");
 }
 
 function updateActiveCaption(options = {}) {
