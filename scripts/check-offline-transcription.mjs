@@ -1,4 +1,12 @@
+import { existsSync } from "node:fs";
+
 import { createOfflineCheckSummary, createOfflineEngineReport } from "../src/offline-transcription.mjs";
+
+for (const envFile of [".env.local", ".env"]) {
+  if (existsSync(envFile) && typeof process.loadEnvFile === "function") {
+    process.loadEnvFile(envFile);
+  }
+}
 
 const report = await createOfflineEngineReport();
 

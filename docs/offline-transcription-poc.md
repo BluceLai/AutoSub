@@ -132,6 +132,24 @@ Windows 安裝步驟另見：`docs/whisper-cpp-windows-setup.md`。
 | UI | 顯示離線、模型、處理中、完成、失敗訊息 |
 | 成功判定 | 可在無 `OPENAI_API_KEY` 情況下產生可匯入 AutoSub 的字幕段 |
 
+## 本機安裝與 20 秒實測
+
+2026-08-19 已在目前 Windows 環境安裝 `whisper.cpp` v1.8.6 CPU binary 與 `ggml-small.bin` multilingual model。
+
+| 項目 | 結果 |
+| --- | --- |
+| CLI | `C:\AutoSubTools\whisper.cpp\Release\whisper-cli.exe` |
+| 模型 | `C:\AutoSubTools\models\ggml-small.bin` |
+| 模型大小 | 487,601,967 bytes |
+| AutoSub 偵測 | `npm run offline:check` 顯示 `whisper.cpp` ready |
+| 測試素材 | TwinCAT HMI 教學影片前 20 秒，轉成 16 kHz mono WAV |
+| 執行時間 | 約 6.39 秒 |
+| 輸出 | `samples/output/offline-poc-20s.srt`, `.vtt`, `.json` |
+| 字幕段數 | 4 段 |
+| 匯入驗證 | `parseSubtitleFile()` 可讀入 SRT，最後時間碼 19.5 秒 |
+
+辨識觀察：整體能產生可用的中文時間碼；部分專有詞會錯，例如講者名稱與 `TwinCAT HMI` 被拆成較口語/音近文字。這符合預期，下一階段要用 prompt、專有詞表或後處理改善。
+
 ## 第一手來源
 
 - [ggml-org/whisper.cpp README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md)

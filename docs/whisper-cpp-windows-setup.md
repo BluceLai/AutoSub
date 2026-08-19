@@ -84,6 +84,16 @@ C:\AutoSubTools\models\ggml-small.bin
 )
 ```
 
+如果 PATH 尚未刷新，也可以明確設定 CLI 路徑：
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "AUTOSUB_WHISPER_CPP_CLI",
+  "C:\AutoSubTools\whisper.cpp\Release\whisper-cli.exe",
+  "User"
+)
+```
+
 重新開一個 PowerShell 後檢查：
 
 ```powershell

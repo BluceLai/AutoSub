@@ -42,6 +42,16 @@ describe("offline transcription engine checks", () => {
     assert.equal(report.engines[0].modelPath, null);
   });
 
+  it("uses an explicit whisper.cpp CLI path when PATH is not refreshed", async () => {
+    const report = await createOfflineEngineReport({
+      env: { AUTOSUB_WHISPER_CPP_CLI: "C:/AutoSubTools/whisper.cpp/Release/whisper-cli.exe" },
+      commandLookup: async () => null,
+    });
+
+    assert.equal(report.engines[0].status, "needs-model");
+    assert.equal(report.engines[0].commandPath, "C:/AutoSubTools/whisper.cpp/Release/whisper-cli.exe");
+  });
+
   it("marks an engine ready when command and model path are configured", async () => {
     const report = await createOfflineEngineReport({
       env: { AUTOSUB_WHISPER_CPP_MODEL: "C:/models/ggml-small.bin" },

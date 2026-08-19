@@ -5,6 +5,7 @@ export const offlineEngineCandidates = [
     id: "whisper-cpp",
     label: "whisper.cpp",
     commands: ["whisper-cli"],
+    commandEnv: "AUTOSUB_WHISPER_CPP_CLI",
     modelEnv: "AUTOSUB_WHISPER_CPP_MODEL",
     outputFormats: ["srt", "vtt", "txt", "json"],
   },
@@ -25,12 +26,14 @@ export async function createOfflineEngineReport({
 
   for (const candidate of offlineEngineCandidates) {
     const commandPath = await findFirstAvailableCommand(candidate.commands, commandLookup);
+    const configuredCommandPath = normalizeEnvValue(env[candidate.commandEnv]);
     const modelPath = normalizeEnvValue(env[candidate.modelEnv]);
-    const status = commandPath ? (modelPath ? "ready" : "needs-model") : "missing-command";
+    const resolvedCommandPath = configuredCommandPath ?? commandPath;
+    const status = resolvedCommandPath ? (modelPath ? "ready" : "needs-model") : "missing-command";
 
     engines.push({
       ...candidate,
-      commandPath,
+      commandPath: resolvedCommandPath,
       modelPath,
       status,
     });

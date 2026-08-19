@@ -120,6 +120,7 @@ npm run offline:check
 `whisper.cpp` 若已安裝，請先讓 `whisper-cli` 可被 PATH 找到，並設定模型路徑：
 
 ```text
+AUTOSUB_WHISPER_CPP_CLI=C:\path\to\whisper-cli.exe
 AUTOSUB_WHISPER_CPP_MODEL=C:\path\to\ggml-small.bin
 ```
 
