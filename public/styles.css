@@ -152,6 +152,53 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.engine-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.engine-toggle label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.engine-toggle input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.engine-toggle span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.engine-toggle input:checked + span {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.engine-toggle input:disabled + span {
+  color: #9aa8ae;
+  cursor: not-allowed;
+}
+
 .progress-panel {
   background: var(--panel);
   border: 1px solid var(--line);

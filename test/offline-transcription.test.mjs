@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import {
   createOfflineCheckSummary,
   createOfflineEngineReport,
+  createWhisperCppArgs,
+  createWhisperCppWavArgs,
   offlineEngineCandidates,
   selectPreferredOfflineEngine,
 } from "../src/offline-transcription.mjs";
@@ -86,5 +88,50 @@ describe("offline transcription engine checks", () => {
 
     assert.match(createOfflineCheckSummary(report), /whisper\.cpp: 未找到 CLI/);
     assert.match(createOfflineCheckSummary(report), /faster-whisper: 未找到 CLI/);
+  });
+
+  it("builds ffmpeg args for whisper.cpp wav input", () => {
+    assert.deepEqual(createWhisperCppWavArgs("input.mp4", "input.wav"), [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      "input.mp4",
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      "-c:a",
+      "pcm_s16le",
+      "input.wav",
+    ]);
+  });
+
+  it("builds whisper.cpp args for subtitle output", () => {
+    assert.deepEqual(
+      createWhisperCppArgs({
+        modelPath: "C:/models/ggml-small.bin",
+        audioPath: "input.wav",
+        outputBasePath: "output/offline",
+        language: "zh",
+        prompt: "請使用繁體中文",
+      }),
+      [
+        "-m",
+        "C:/models/ggml-small.bin",
+        "-f",
+        "input.wav",
+        "-l",
+        "zh",
+        "--prompt",
+        "請使用繁體中文",
+        "-osrt",
+        "-ovtt",
+        "-oj",
+        "-of",
+        "output/offline",
+      ],
+    );
   });
 });

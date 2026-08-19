@@ -26,11 +26,17 @@ import {
   shouldExtractAudio,
 } from "./media-upload.mjs";
 import {
+  createOfflineEngineReport,
+  createWhisperCppArgs,
+  createWhisperCppWavArgs,
+} from "./offline-transcription.mjs";
+import {
   createTranscriptionJob,
   isTranscriptionJobTerminal,
   recordTranscriptionJobEvent,
   serializeServerSentEvent,
 } from "./transcription-job.mjs";
+import { parseSubtitleFile } from "../public/subtitle-file.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
@@ -63,10 +69,33 @@ const server = createServer(async (req, res) => {
     const requestUrl = new URL(req.url ?? "/", serverUrl);
 
     if (req.method === "GET" && req.url === "/api/health") {
+      const offlineReport = await createOfflineEngineReport();
+      const whisperCpp = getWhisperCppEngine(offlineReport);
       sendJson(res, 200, {
         ok: true,
         hasApiKey: Boolean(process.env.OPENAI_API_KEY),
         hasFfmpeg: Boolean(await findCommand("ffmpeg")),
+        transcriptionEngines: {
+          cloud: {
+            id: "cloud",
+            label: "OpenAI 雲端",
+            ready: Boolean(process.env.OPENAI_API_KEY),
+          },
+          offline: {
+            id: "offline",
+            label: "本機離線",
+            ready: whisperCpp?.status === "ready",
+            status: whisperCpp?.status ?? "missing-command",
+            engine: whisperCpp
+              ? {
+                  id: whisperCpp.id,
+                  label: whisperCpp.label,
+                  commandPath: whisperCpp.commandPath,
+                  modelPath: whisperCpp.modelPath,
+                }
+              : null,
+          },
+        },
         port: getCurrentPort(),
         url: serverUrl,
       });
@@ -119,13 +148,22 @@ server.listen(requestedPort, "127.0.0.1", () => {
 });
 
 async function handleTranscribe(req, res) {
+  const engine = parseTranscriptionEngine(req.headers["x-transcription-engine"]);
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  if (engine === "cloud" && !apiKey) {
     sendJson(res, 400, {
       error: "Missing OPENAI_API_KEY",
       detail: "Create .env.local with OPENAI_API_KEY=sk-...",
     });
     return;
+  }
+
+  if (engine === "offline") {
+    const offlineError = await createOfflineReadinessError();
+    if (offlineError) {
+      sendJson(res, 400, offlineError);
+      return;
+    }
   }
 
   const contentLength = Number(req.headers["content-length"] ?? 0);
@@ -165,6 +203,7 @@ async function handleTranscribe(req, res) {
         projectKey,
         mediaDuration,
         chunkSeconds,
+        engine,
       }),
     );
   } catch (error) {
@@ -173,13 +212,22 @@ async function handleTranscribe(req, res) {
 }
 
 async function handleCreateTranscriptionJob(req, res) {
+  const engine = parseTranscriptionEngine(req.headers["x-transcription-engine"]);
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  if (engine === "cloud" && !apiKey) {
     sendJson(res, 400, {
       error: "Missing OPENAI_API_KEY",
       detail: "Create .env.local with OPENAI_API_KEY=sk-...",
     });
     return;
+  }
+
+  if (engine === "offline") {
+    const offlineError = await createOfflineReadinessError();
+    if (offlineError) {
+      sendJson(res, 400, offlineError);
+      return;
+    }
   }
 
   const contentLength = Number(req.headers["content-length"] ?? 0);
@@ -219,7 +267,7 @@ async function handleCreateTranscriptionJob(req, res) {
     eventsUrl: `/api/transcribe-jobs/${encodeURIComponent(job.id)}/events`,
   });
 
-  processTranscriptionJob(job, { apiKey, buffer, contentType, fileName, model, prompt, projectKey, mediaDuration, chunkSeconds });
+  processTranscriptionJob(job, { apiKey, buffer, contentType, fileName, model, prompt, projectKey, mediaDuration, chunkSeconds, engine });
 }
 
 function handleTranscriptionJobEvents(jobId, req, res) {
@@ -306,6 +354,7 @@ async function createTranscriptionResult({
   projectKey,
   mediaDuration,
   chunkSeconds = defaultChunkSeconds,
+  engine = "cloud",
   publish = () => {},
 }) {
   publish({
@@ -313,6 +362,16 @@ async function createTranscriptionResult({
     message: "正在準備檔案...",
     percent: 12,
   });
+
+  if (engine === "offline") {
+    return createOfflineWhisperCppTranscriptionResult({
+      buffer,
+      contentType,
+      fileName,
+      prompt,
+      publish,
+    });
+  }
 
   const extractsAudio = shouldExtractAudio({ contentType, fileName });
   publish({
@@ -485,6 +544,93 @@ async function createChunkedTranscriptionResult({
   return createMergedChunkTranscriptionResult({ chunkResults, mediaDuration, model, uploadMetadata, chunks, chunkSeconds });
 }
 
+async function createOfflineWhisperCppTranscriptionResult({ buffer, contentType, fileName, prompt, publish }) {
+  const offlineReport = await createOfflineEngineReport();
+  const whisperCpp = getWhisperCppEngine(offlineReport);
+  if (whisperCpp?.status !== "ready") {
+    throw new Error(createOfflineReadinessDetail(whisperCpp));
+  }
+
+  const ffmpeg = await findCommand("ffmpeg");
+  if (!ffmpeg) {
+    throw new Error("找不到 ffmpeg，離線轉錄需要先把媒體轉成 whisper.cpp 使用的 WAV。");
+  }
+
+  publish({
+    stage: "preparing-offline-audio",
+    message: "正在準備 whisper.cpp 使用的 16 kHz mono WAV...",
+    percent: 35,
+  });
+
+  const tempDir = await mkdtemp(join(tmpdir(), "autosub-offline-"));
+  const inputPath = join(tempDir, fileName);
+  const wavPath = join(tempDir, "offline-input.wav");
+  const outputBasePath = join(tempDir, "offline-result");
+
+  try {
+    await writeFile(inputPath, buffer);
+    await run(ffmpeg, createWhisperCppWavArgs(inputPath, wavPath));
+
+    publish({
+      stage: "transcribing-offline",
+      message: "正在使用 whisper.cpp 本機離線轉錄...",
+      percent: 65,
+      upload: {
+        offline: true,
+        extractedAudio: shouldExtractAudio({ contentType, fileName }),
+        fileName: "offline-input.wav",
+        contentType: "audio/wav",
+        originalBytes: buffer.byteLength,
+        uploadedBytes: (await stat(wavPath)).size,
+      },
+    });
+
+    await run(
+      whisperCpp.commandPath,
+      createWhisperCppArgs({
+        modelPath: whisperCpp.modelPath,
+        audioPath: wavPath,
+        outputBasePath,
+        language: "zh",
+        prompt,
+      }),
+    );
+
+    publish({
+      stage: "building-subtitles",
+      message: "正在匯入 whisper.cpp 產生的字幕...",
+      percent: 90,
+    });
+
+    const srt = await readFile(`${outputBasePath}.srt`, "utf8");
+    const segments = parseSubtitleFile(srt).map((segment, index) => ({
+      ...segment,
+      id: crypto.randomUUID(),
+      index: index + 1,
+    }));
+
+    return {
+      text: segments.map((segment) => segment.text).join(" "),
+      language: "zh",
+      duration: segments.at(-1)?.end ?? null,
+      model: "whisper.cpp",
+      upload: {
+        offline: true,
+        engine: whisperCpp.label,
+        modelPath: whisperCpp.modelPath,
+        extractedAudio: shouldExtractAudio({ contentType, fileName }),
+        fileName: "offline-input.wav",
+        contentType: "audio/wav",
+        originalBytes: buffer.byteLength,
+        uploadedBytes: (await stat(wavPath)).size,
+      },
+      segments,
+    };
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+}
+
 async function callOpenAiTranscription({ apiKey, upload, model, prompt }) {
   const body = new FormData();
   body.append("file", new Blob([upload.buffer], { type: upload.contentType }), upload.fileName);
@@ -564,6 +710,29 @@ async function readJsonFile(filePath) {
 async function writeJsonFile(filePath, value) {
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function getWhisperCppEngine(report) {
+  return report?.engines?.find((engine) => engine.id === "whisper-cpp") ?? null;
+}
+
+async function createOfflineReadinessError() {
+  const report = await createOfflineEngineReport();
+  const whisperCpp = getWhisperCppEngine(report);
+  if (whisperCpp?.status === "ready") return null;
+
+  return {
+    error: "Offline transcription is not ready",
+    detail: createOfflineReadinessDetail(whisperCpp),
+  };
+}
+
+function createOfflineReadinessDetail(whisperCpp) {
+  if (whisperCpp?.status === "needs-model") {
+    return `已找到 whisper.cpp，但尚未設定 ${whisperCpp.modelEnv}。`;
+  }
+
+  return "尚未安裝 whisper.cpp，請先執行 npm run offline:install-whisper-cpp，或設定 AUTOSUB_WHISPER_CPP_CLI 與 AUTOSUB_WHISPER_CPP_MODEL。";
 }
 
 function getUploadMetadata(upload) {
@@ -809,6 +978,10 @@ function parsePositiveNumber(value) {
   if (value == null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseTranscriptionEngine(value) {
+  return String(value ?? "").toLowerCase() === "offline" ? "offline" : "cloud";
 }
 
 function getCurrentPort() {

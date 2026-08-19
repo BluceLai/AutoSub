@@ -27,6 +27,7 @@ const transcribeButton = document.querySelector("#transcribeButton");
 const exportButton = document.querySelector("#exportButton");
 const exportFormat = document.querySelector("#exportFormat");
 const shutdownButton = document.querySelector("#shutdownButton");
+const engineInputs = Array.from(document.querySelectorAll("input[name='transcriptionEngine']"));
 const statusText = document.querySelector("#statusText");
 const keyStatus = document.querySelector("#keyStatus");
 const projectStatus = document.querySelector("#projectStatus");
@@ -66,7 +67,10 @@ let segments = [];
 let activeSegmentId = null;
 let hasApiKey = false;
 let hasFfmpeg = false;
+let hasOfflineEngine = false;
+let offlineEngineStatus = "missing-command";
 let currentProjectKey = null;
+let transcriptionEngine = "cloud";
 let saveTimer = null;
 let splitMode = false;
 let undoStack = [];
@@ -82,7 +86,20 @@ let qualityIssues = [];
 let activeQualityIssueIndex = -1;
 let qualityPulseTimer = null;
 
+initializeTranscriptionEngine();
 checkHealth();
+
+for (const input of engineInputs) {
+  input.addEventListener("change", () => {
+    if (!input.checked) return;
+
+    transcriptionEngine = input.value === "offline" ? "offline" : "cloud";
+    localStorage.setItem("autosub:transcription-engine", transcriptionEngine);
+    updateTranscribeAvailability();
+    if (selectedFile) setStatus(getSelectedFileStatusMessage(selectedFile));
+    updateKeyStatus();
+  });
+}
 
 window.addEventListener("keydown", (event) => {
   if (isEditableTarget(event.target)) return;
@@ -248,6 +265,7 @@ transcribeButton.addEventListener("click", async () => {
     createTranscriptionConfirmationMessage({
       fileName: selectedFile.name,
       extractsAudio: needsAudioExtraction(selectedFile),
+      engine: transcriptionEngine,
       segmentCount: segments.length,
       durationSeconds: Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : null,
     }),
@@ -260,8 +278,8 @@ transcribeButton.addEventListener("click", async () => {
   transcribeButton.disabled = true;
   transcribeButton.textContent = "處理中...";
   exportButton.disabled = true;
-  setProgress("準備上傳", 0);
-  setStatus("正在準備檔案...");
+  setProgress(transcriptionEngine === "offline" ? "準備離線轉錄" : "準備上傳", 0);
+  setStatus(transcriptionEngine === "offline" ? "正在準備本機離線轉錄..." : "正在準備檔案...");
 
   try {
     const payload = await transcribeWithProgress(selectedFile);
@@ -1256,12 +1274,9 @@ async function checkHealth() {
     const health = await response.json();
     hasApiKey = Boolean(health.hasApiKey);
     hasFfmpeg = Boolean(health.hasFfmpeg);
-    keyStatus.className = `key-status ${hasApiKey ? "is-ready" : "is-missing"}`;
-    keyStatus.textContent = hasApiKey
-      ? hasFfmpeg
-        ? "OpenAI API key 已設定，可以正式產生字幕"
-        : "OpenAI API key 已設定；影片轉錄需要 ffmpeg"
-      : "尚未設定 OpenAI API key；可先用測試字幕模式";
+    hasOfflineEngine = Boolean(health.transcriptionEngines?.offline?.ready);
+    offlineEngineStatus = health.transcriptionEngines?.offline?.status ?? "missing-command";
+    updateKeyStatus();
     updateTranscribeAvailability();
     if (selectedFile) setStatus(getSelectedFileStatusMessage(selectedFile));
   } catch {
@@ -1280,17 +1295,58 @@ function updateTranscribeAvailability() {
 }
 
 function canTranscribeSelectedFile() {
-  if (!selectedFile || !hasApiKey) return false;
+  if (!selectedFile) return false;
+  if (transcriptionEngine === "offline") return hasFfmpeg && hasOfflineEngine;
+  if (!hasApiKey) return false;
   return !needsAudioExtraction(selectedFile) || hasFfmpeg;
 }
 
 function getSelectedFileStatusMessage(file) {
+  if (transcriptionEngine === "offline") {
+    if (!hasFfmpeg) return `已選擇 ${file.name}。本機離線轉錄需要先安裝 ffmpeg。`;
+    if (!hasOfflineEngine) return `已選擇 ${file.name}。本機離線轉錄尚未就緒：${getOfflineEngineStatusLabel()}`;
+    return `已選擇 ${file.name}，可以用 whisper.cpp 本機離線產生字幕。`;
+  }
+
   if (!hasApiKey) return `已選擇 ${file.name}。尚未設定 API key，可先載入測試字幕。`;
   if (needsAudioExtraction(file) && !hasFfmpeg) {
     return `已選擇影片 ${file.name}。這台電腦尚未安裝 ffmpeg，暫時只能轉錄音訊檔。`;
   }
   if (needsAudioExtraction(file)) return `已選擇 ${file.name}，產生字幕時會先在本機抽出音訊。`;
   return `已選擇 ${file.name}，可以開始產生字幕。`;
+}
+
+function initializeTranscriptionEngine() {
+  const savedEngine = localStorage.getItem("autosub:transcription-engine");
+  transcriptionEngine = savedEngine === "offline" ? "offline" : "cloud";
+  for (const input of engineInputs) {
+    input.checked = input.value === transcriptionEngine;
+  }
+}
+
+function updateKeyStatus() {
+  if (transcriptionEngine === "offline") {
+    keyStatus.className = `key-status ${hasOfflineEngine && hasFfmpeg ? "is-ready" : "is-missing"}`;
+    keyStatus.textContent =
+      hasOfflineEngine && hasFfmpeg
+        ? "本機離線 whisper.cpp 已就緒，不會使用 OpenAI"
+        : `本機離線尚未就緒：${getOfflineEngineStatusLabel()}`;
+    return;
+  }
+
+  keyStatus.className = `key-status ${hasApiKey ? "is-ready" : "is-missing"}`;
+  keyStatus.textContent = hasApiKey
+    ? hasFfmpeg
+      ? "OpenAI API key 已設定，可以正式產生字幕"
+      : "OpenAI API key 已設定；影片轉錄需要 ffmpeg"
+    : "尚未設定 OpenAI API key；可先用測試字幕模式";
+}
+
+function getOfflineEngineStatusLabel() {
+  if (!hasFfmpeg) return "尚未安裝 ffmpeg";
+  if (offlineEngineStatus === "needs-model") return "尚未設定 whisper.cpp 模型";
+  if (offlineEngineStatus === "ready") return "whisper.cpp 已就緒";
+  return "尚未安裝 whisper.cpp";
 }
 
 function needsAudioExtraction(file) {
@@ -1419,6 +1475,7 @@ function transcribeWithProgress(file) {
     request.responseType = "json";
     request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     request.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    request.setRequestHeader("X-Transcription-Engine", transcriptionEngine);
     request.setRequestHeader("X-Transcription-Model", "whisper-1");
     if (currentProjectKey) request.setRequestHeader("X-Project-Key", encodeURIComponent(currentProjectKey));
     if (Number.isFinite(mediaPlayer.duration) && mediaPlayer.duration > 0) {
@@ -1500,6 +1557,10 @@ function applyTranscriptionProgressUpdate(update) {
 
 function formatUploadSummary(upload) {
   if (!upload) return "";
+
+  if (upload.offline) {
+    return ` 已使用 ${upload.engine ?? "whisper.cpp"} 本機離線轉錄。`;
+  }
 
   const uploadedSize = formatFileSize(upload.uploadedBytes);
   if (upload.extractedAudio) {

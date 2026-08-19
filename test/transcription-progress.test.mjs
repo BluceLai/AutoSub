@@ -29,6 +29,15 @@ describe("transcription progress view", () => {
     });
   });
 
+  it("shows offline whisper.cpp progress", () => {
+    assert.deepEqual(getTranscriptionProgressView({ stage: "transcribing-offline", message: "正在本機離線轉錄", percent: 62 }), {
+      label: "本機離線轉錄",
+      percent: 62,
+      indeterminate: true,
+      status: "正在本機離線轉錄",
+    });
+  });
+
   it("falls back to queued for unknown events", () => {
     assert.equal(getTranscriptionProgressView({ stage: "mystery" }).label, "等待處理");
   });

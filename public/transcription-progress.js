@@ -6,6 +6,8 @@ const progressViews = new Map([
   ["resuming-chunks", { label: "續跑分段結果", percent: 38, indeterminate: false, status: "正在接回已完成的分段結果..." }],
   ["splitting-audio", { label: "準備分段音訊", percent: 45, indeterminate: true, status: "正在準備長影片分段音訊..." }],
   ["transcribing-chunk", { label: "分段轉錄中", percent: 65, indeterminate: true, status: "正在逐段送 OpenAI 轉錄..." }],
+  ["preparing-offline-audio", { label: "準備離線音訊", percent: 35, indeterminate: true, status: "正在準備 whisper.cpp 使用的音訊..." }],
+  ["transcribing-offline", { label: "本機離線轉錄", percent: 65, indeterminate: true, status: "正在使用 whisper.cpp 本機轉錄..." }],
   ["uploading-openai", { label: "送 OpenAI 轉錄", percent: 60, indeterminate: true, status: "正在送 OpenAI 辨識並產生時間碼..." }],
   ["building-subtitles", { label: "建立字幕段落", percent: 90, indeterminate: false, status: "正在把轉錄結果轉成可編輯字幕..." }],
   ["complete", { label: "完成", percent: 100, indeterminate: false, status: "字幕已產生完成。" }],

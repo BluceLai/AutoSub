@@ -62,6 +62,36 @@ export function createOfflineCheckSummary(report) {
     .join("\n");
 }
 
+export function createWhisperCppWavArgs(inputPath, outputPath) {
+  return [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-y",
+    "-i",
+    inputPath,
+    "-ar",
+    "16000",
+    "-ac",
+    "1",
+    "-c:a",
+    "pcm_s16le",
+    outputPath,
+  ];
+}
+
+export function createWhisperCppArgs({
+  modelPath,
+  audioPath,
+  outputBasePath,
+  language = "zh",
+  prompt = "",
+}) {
+  const args = ["-m", modelPath, "-f", audioPath, "-l", language];
+  if (prompt) args.push("--prompt", prompt);
+  return [...args, "-osrt", "-ovtt", "-oj", "-of", outputBasePath];
+}
+
 function createEngineStatusMessage(engine) {
   if (engine.status === "ready") {
     return `可用，CLI=${engine.commandPath}，模型=${engine.modelPath}`;

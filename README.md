@@ -33,8 +33,10 @@
 - 在瀏覽器中預覽影片
 - 匯入 `.srt` / `.vtt` 字幕檔，直接進入預覽與編輯
 - 載入測試字幕，不消耗 OpenAI 用量
-- 影片檔會先用本機 ffmpeg 抽成音訊，再呼叫 OpenAI Audio Transcriptions API 產生字幕
-- 音訊檔會直接呼叫 OpenAI Audio Transcriptions API 產生字幕
+- 可在工具列選擇 OpenAI 雲端或本機離線轉錄
+- OpenAI 模式：影片檔會先用本機 ffmpeg 抽成音訊，再呼叫 OpenAI Audio Transcriptions API 產生字幕
+- OpenAI 模式：音訊檔會直接呼叫 OpenAI Audio Transcriptions API 產生字幕
+- 本機離線模式：使用 `whisper.cpp` 產生字幕，不會把音訊送到 OpenAI
 - 目前已有字幕段落時，重新產生字幕前會先要求確認，避免重複消耗 OpenAI 用量
 - 顯示上傳與轉錄處理進度，包含本機抽音訊、送 OpenAI、建立字幕與完成階段
 - 長影片會依固定時間區間分段轉錄，每段完成後保存文字與時間碼結果，失敗後可從未完成段落續跑
@@ -109,7 +111,7 @@ winget install Gyan.FFmpeg
 
 ## 離線轉錄 PoC
 
-目前離線模式仍在 PoC 階段，尚未接進 UI 的「產生字幕」。研究結論建議第一個整合 `whisper.cpp`，因為它有 Windows 可用的 CLI，能直接輸出 SRT / VTT / JSON，比 `faster-whisper` 少一層 Python worker 發佈成本。
+目前離線模式已接進 UI 的「產生字幕」，會使用 `whisper.cpp` 產出 SRT 後轉成 AutoSub 字幕段落。研究結論建議第一個整合 `whisper.cpp`，因為它有 Windows 可用的 CLI，能直接輸出 SRT / VTT / JSON，比 `faster-whisper` 少一層 Python worker 發佈成本。
 
 檢查這台電腦是否已具備離線轉錄引擎：
 
@@ -144,7 +146,7 @@ npm run check
 
 ## 設計取捨
 
-這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；影片轉錄時會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API。音訊檔則直接送到 OpenAI。離線轉錄目前只完成研究與本機環境偵測，尚未取代 OpenAI 主流程。
+這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動。OpenAI 模式會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API；本機離線模式會用 `whisper.cpp` 在這台電腦轉錄，不送 OpenAI。
 
 正式產生字幕時，瀏覽器會先把檔案上傳到本機 server，server 建立一個轉錄工作並用 server-sent events 回報階段進度。長影片會切成 5 分鐘一段逐段轉錄，每段完成後只保存轉錄文字與時間碼結果到 `.autosub-work/`，不保存影片或音訊。
 

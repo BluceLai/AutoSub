@@ -66,4 +66,21 @@ describe("transcription guard", () => {
       ].join("\n\n"),
     );
   });
+
+  it("explains offline transcription mode without cloud upload wording", () => {
+    assert.equal(
+      createTranscriptionConfirmationMessage({
+        fileName: "training.mp4",
+        extractsAudio: true,
+        engine: "offline",
+        segmentCount: 2,
+        durationSeconds: 620,
+      }),
+      [
+        "產生字幕會在本機使用 whisper.cpp 離線轉錄「training.mp4」，不會把音訊送到 OpenAI。",
+        "目前已有 2 段字幕，重新產生會用新的轉錄結果取代目前字幕。",
+        "目前媒體長度約 10 分 20 秒，本機離線轉錄會花較長時間，請保持 AutoSub 服務開啟。",
+      ].join("\n\n"),
+    );
+  });
 });

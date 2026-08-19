@@ -16,6 +16,16 @@
             <div id="keyStatus" class="key-status is-checking">正在檢查 OpenAI API key...</div>
           </div>
           <div class="actions">
+            <fieldset class="engine-toggle" aria-label="轉錄模式">
+              <label>
+                <input type="radio" name="transcriptionEngine" value="cloud" checked />
+                <span>OpenAI</span>
+              </label>
+              <label>
+                <input type="radio" name="transcriptionEngine" value="offline" />
+                <span>本機離線</span>
+              </label>
+            </fieldset>
             <label class="file-button">
               <input id="mediaInput" type="file" accept="video/*,audio/*" />
               選擇影片
