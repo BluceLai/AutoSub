@@ -7,7 +7,7 @@
     "dev": "node src/server.mjs --port=0",
     "start": "node src/server.mjs --port=0",
     "sample:clip": "node scripts/create-test-clip.mjs",
-    "check": "node --check src/server.mjs && node --check scripts/create-test-clip.mjs"
+    "check": "node --check src/server.mjs && node --check scripts/create-test-clip.mjs && node --check public/app.js"
   },
   "engines": {
     "node": ">=22"

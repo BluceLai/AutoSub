@@ -27,6 +27,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -52,6 +53,14 @@ button:hover,
   background: var(--accent-strong);
 }
 
+.secondary-button {
+  background: #315467;
+}
+
+.secondary-button:hover {
+  background: #253f4d;
+}
+
 .danger-button {
   background: #b42318;
 }
@@ -63,6 +72,21 @@ button:hover,
 button:disabled {
   background: #b8c4c9;
   cursor: not-allowed;
+}
+
+.format-select {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0 34px 0 12px;
+  font-weight: 700;
+}
+
+.format-select:disabled {
+  color: var(--muted);
+  background: #edf2f4;
 }
 
 .file-button input {

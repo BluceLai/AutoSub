@@ -1,7 +1,9 @@
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
+const demoButton = document.querySelector("#demoButton");
 const transcribeButton = document.querySelector("#transcribeButton");
 const exportButton = document.querySelector("#exportButton");
+const exportFormat = document.querySelector("#exportFormat");
 const shutdownButton = document.querySelector("#shutdownButton");
 const statusText = document.querySelector("#statusText");
 const timeText = document.querySelector("#timeText");
@@ -32,8 +34,10 @@ mediaInput.addEventListener("change", () => {
   mediaUrl = URL.createObjectURL(file);
   mediaPlayer.src = mediaUrl;
 
+  demoButton.disabled = false;
   transcribeButton.disabled = false;
   exportButton.disabled = true;
+  exportFormat.disabled = true;
   hideProgress();
   setStatus(`已選擇 ${file.name}，可以開始產生字幕。`);
   renderSegments();
@@ -56,6 +60,7 @@ transcribeButton.addEventListener("click", async () => {
     setProgress("完成", 100);
     setStatus(`完成：產生 ${segments.length} 段字幕。`);
     exportButton.disabled = segments.length === 0;
+    exportFormat.disabled = segments.length === 0;
     renderSegments();
     updateActiveCaption();
   } catch (error) {
@@ -67,18 +72,32 @@ transcribeButton.addEventListener("click", async () => {
   }
 });
 
+demoButton.addEventListener("click", () => {
+  if (!selectedFile) return;
+
+  const duration = Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : 20;
+  segments = createDemoSegments(Math.min(duration, 20));
+  setProgress("測試字幕已載入", 100);
+  setStatus(`已載入 ${segments.length} 段測試字幕，不會消耗 OpenAI 用量。`);
+  exportButton.disabled = false;
+  exportFormat.disabled = false;
+  renderSegments();
+  updateActiveCaption();
+});
+
 exportButton.addEventListener("click", () => {
   if (segments.length === 0) return;
 
-  const srt = toSrt(segments);
   const baseName = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, "") : "autosub";
-  const blob = new Blob([srt], { type: "application/x-subrip;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${baseName}.srt`;
-  link.click();
-  URL.revokeObjectURL(url);
+  const format = exportFormat.value;
+
+  if (format === "vtt") {
+    downloadText(`${baseName}.vtt`, toVtt(segments), "text/vtt;charset=utf-8");
+  } else if (format === "txt") {
+    downloadText(`${baseName}.txt`, toTxt(segments), "text/plain;charset=utf-8");
+  } else {
+    downloadText(`${baseName}.srt`, toSrt(segments), "application/x-subrip;charset=utf-8");
+  }
 });
 
 shutdownButton.addEventListener("click", async () => {
@@ -86,8 +105,10 @@ shutdownButton.addEventListener("click", async () => {
   if (!shouldShutdown) return;
 
   shutdownButton.disabled = true;
+  demoButton.disabled = true;
   transcribeButton.disabled = true;
   exportButton.disabled = true;
+  exportFormat.disabled = true;
   setStatus("正在關閉 AutoSub 本機服務...");
 
   try {
@@ -163,6 +184,7 @@ function renderSegments() {
       renderSegments();
       updateActiveCaption();
       exportButton.disabled = segments.length === 0;
+      exportFormat.disabled = segments.length === 0;
     });
 
     tools.append(duration, deleteButton);
@@ -266,6 +288,36 @@ function transcribeWithProgress(file) {
   });
 }
 
+function createDemoSegments(duration) {
+  const safeDuration = Math.max(8, duration);
+  const ranges = [
+    [0.6, 4.1, "歡迎使用 AutoSub，這是不用 OpenAI 用量的測試字幕。"],
+    [4.4, 8.2, "你可以播放影片，確認字幕會跟著時間顯示。"],
+    [8.5, 12.4, "右邊每一段文字和時間碼都可以直接修改。"],
+    [12.8, Math.min(18.5, safeDuration), "最後可以選擇 SRT、VTT 或 TXT 匯出。"],
+  ];
+
+  return ranges
+    .filter(([, startEnd]) => startEnd <= safeDuration)
+    .map(([start, end, text], index) => ({
+      id: crypto.randomUUID(),
+      index: index + 1,
+      start,
+      end: Math.min(end, safeDuration),
+      text,
+    }));
+}
+
+function downloadText(fileName, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function toSrt(items) {
   return items
     .map((segment, index) => {
@@ -278,6 +330,18 @@ function toSrt(items) {
     .join("\n\n");
 }
 
+function toVtt(items) {
+  return `WEBVTT\n\n${items
+    .map((segment) => {
+      return [`${formatVttTime(segment.start)} --> ${formatVttTime(segment.end)}`, segment.text.trim()].join("\n");
+    })
+    .join("\n\n")}\n`;
+}
+
+function toTxt(items) {
+  return `${items.map((segment) => segment.text.trim()).filter(Boolean).join("\n")}\n`;
+}
+
 function formatSrtTime(seconds) {
   const totalMs = Math.max(0, Math.round(seconds * 1000));
   const ms = totalMs % 1000;
@@ -287,6 +351,10 @@ function formatSrtTime(seconds) {
   const m = totalMinutes % 60;
   const h = Math.floor(totalMinutes / 60);
   return `${pad(h)}:${pad(m)}:${pad(s)},${String(ms).padStart(3, "0")}`;
+}
+
+function formatVttTime(seconds) {
+  return formatSrtTime(seconds).replace(",", ".");
 }
 
 function formatClock(seconds) {

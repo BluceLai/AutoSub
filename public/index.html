@@ -19,8 +19,14 @@
               <input id="mediaInput" type="file" accept="video/*,audio/*" />
               選擇影片
             </label>
+            <button id="demoButton" class="secondary-button" type="button" disabled>載入測試字幕</button>
             <button id="transcribeButton" type="button" disabled>產生字幕</button>
-            <button id="exportButton" type="button" disabled>匯出 SRT</button>
+            <select id="exportFormat" class="format-select" aria-label="匯出格式" disabled>
+              <option value="srt">SRT</option>
+              <option value="vtt">VTT</option>
+              <option value="txt">TXT</option>
+            </select>
+            <button id="exportButton" type="button" disabled>匯出字幕</button>
             <button id="shutdownButton" class="danger-button" type="button">結束服務</button>
           </div>
         </div>
