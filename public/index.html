@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AutoSub</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-label="字幕工作區">
+        <div class="topbar">
+          <div>
+            <h1>AutoSub</h1>
+            <p>本機影片預覽，OpenAI 產生繁中字幕，匯出 SRT。</p>
+          </div>
+          <div class="actions">
+            <label class="file-button">
+              <input id="mediaInput" type="file" accept="video/*,audio/*" />
+              選擇影片
+            </label>
+            <button id="transcribeButton" type="button" disabled>產生字幕</button>
+            <button id="exportButton" type="button" disabled>匯出 SRT</button>
+          </div>
+        </div>
+
+        <div class="content-grid">
+          <section class="preview-panel" aria-label="影片預覽">
+            <div class="player-frame">
+              <video id="mediaPlayer" controls playsinline></video>
+              <div id="captionOverlay" class="caption-overlay" aria-live="polite"></div>
+            </div>
+            <div class="status-row">
+              <span id="statusText">請先選擇影片或音訊檔。</span>
+              <span id="timeText">00:00.000</span>
+            </div>
+          </section>
+
+          <aside class="editor-panel" aria-label="字幕編輯器">
+            <div class="panel-header">
+              <h2>字幕</h2>
+              <span id="segmentCount">0 段</span>
+            </div>
+            <div id="emptyState" class="empty-state">
+              選擇檔案後按「產生字幕」，這裡會出現可編輯的字幕段落。
+            </div>
+            <ol id="segmentsList" class="segments-list" aria-label="字幕段落"></ol>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
