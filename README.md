@@ -29,6 +29,7 @@
 
 - 選擇本機影片或音訊檔
 - 在瀏覽器中預覽影片
+- 匯入 `.srt` / `.vtt` 字幕檔，直接進入預覽與編輯
 - 載入測試字幕，不消耗 OpenAI 用量
 - 呼叫 OpenAI Audio Transcriptions API 產生字幕
 - 顯示上傳與轉錄處理進度

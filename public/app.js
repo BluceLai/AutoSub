@@ -9,11 +9,14 @@ import {
 } from "./subtitle-timing.js";
 import { getSubtitleJumpTarget } from "./subtitle-navigation.js";
 import { getSubtitleInsertSlot } from "./subtitle-insert.js";
+import { parseSubtitleFile } from "./subtitle-file.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
 const projectInput = document.querySelector("#projectInput");
 const importProjectButton = document.querySelector("#importProjectButton");
+const subtitleInput = document.querySelector("#subtitleInput");
+const importSubtitleButton = document.querySelector("#importSubtitleButton");
 const exportProjectButton = document.querySelector("#exportProjectButton");
 const demoButton = document.querySelector("#demoButton");
 const transcribeButton = document.querySelector("#transcribeButton");
@@ -136,6 +139,7 @@ mediaInput.addEventListener("change", () => {
   normalizeSegmentOrder();
 
   importProjectButton.disabled = false;
+  importSubtitleButton.disabled = false;
   addSegmentButton.disabled = false;
   exportProjectButton.disabled = segments.length === 0;
   demoButton.disabled = false;
@@ -249,6 +253,10 @@ importProjectButton.addEventListener("click", () => {
   projectInput.click();
 });
 
+importSubtitleButton.addEventListener("click", () => {
+  subtitleInput.click();
+});
+
 projectInput.addEventListener("change", async () => {
   const file = projectInput.files?.[0];
   projectInput.value = "";
@@ -269,6 +277,26 @@ projectInput.addEventListener("change", async () => {
     setStatus(`已匯入 ${segments.length} 段字幕專案。`);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "專案匯入失敗。", true);
+  }
+});
+
+subtitleInput.addEventListener("change", async () => {
+  const file = subtitleInput.files?.[0];
+  subtitleInput.value = "";
+  if (!file || !selectedFile) return;
+
+  try {
+    const importedSegments = parseSubtitleFile(await file.text()).map((segment) => ({
+      ...segment,
+      id: crypto.randomUUID(),
+    }));
+    commitSegmentChange("匯入字幕", () => {
+      segments = importedSegments;
+    });
+    setProgress("字幕已匯入", 100);
+    setStatus(`已匯入 ${segments.length} 段字幕：${file.name}`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "字幕匯入失敗。", true);
   }
 });
 
@@ -301,6 +329,7 @@ shutdownButton.addEventListener("click", async () => {
   shutdownButton.disabled = true;
   demoButton.disabled = true;
   importProjectButton.disabled = true;
+  importSubtitleButton.disabled = true;
   exportProjectButton.disabled = true;
   addSegmentButton.disabled = true;
   undoButton.disabled = true;
