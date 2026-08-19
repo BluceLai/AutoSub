@@ -475,6 +475,59 @@ video {
   background: #e5f4f2;
 }
 
+.insert-zone {
+  display: flex;
+  align-items: center;
+  min-height: 8px;
+  margin: -1px 14px -1px 106px;
+  color: var(--muted);
+  transition:
+    min-height 140ms ease,
+    background 140ms ease;
+}
+
+.insert-zone::before {
+  content: "";
+  flex: 1;
+  border-top: 2px dashed transparent;
+}
+
+.insert-zone-label {
+  display: none;
+  margin-left: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+body.is-adding-segment .insert-zone {
+  min-height: 34px;
+}
+
+body.is-adding-segment .insert-zone.is-available::before {
+  border-color: var(--accent);
+}
+
+body.is-adding-segment .insert-zone.is-unavailable::before {
+  border-color: rgba(180, 83, 9, 0.45);
+}
+
+body.is-adding-segment .insert-zone-label {
+  display: inline-flex;
+}
+
+body.is-adding-segment .insert-zone.is-drag-over {
+  background: #e5f4f2;
+}
+
+body.is-adding-segment .insert-zone.is-unavailable.is-drag-over {
+  background: #fff2d9;
+}
+
 .segment.has-quality-error {
   box-shadow: inset 3px 0 0 #b42318;
 }

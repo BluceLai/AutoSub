@@ -8,6 +8,7 @@ import {
   getWheelTimeDelta,
 } from "./subtitle-timing.js";
 import { getSubtitleJumpTarget } from "./subtitle-navigation.js";
+import { getSubtitleInsertSlot } from "./subtitle-insert.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -55,6 +56,8 @@ let redoStack = [];
 let textEditSnapshotSegmentId = null;
 let textEditSnapshotTaken = false;
 let followPlayback = true;
+let isDraggingNewSegment = false;
+let addSegmentPointerStart = null;
 
 checkHealth();
 
@@ -152,24 +155,40 @@ mediaInput.addEventListener("change", () => {
   updateActiveCaption();
 });
 
+addSegmentButton.draggable = false;
+addSegmentButton.title = "按住拖曳到兩段字幕中間新增，不會調整原本字幕時間。";
 addSegmentButton.addEventListener("click", () => {
   if (!selectedFile) return;
 
-  const start = clampTime(mediaPlayer.currentTime || 0, 0, getMediaDuration());
-  const nextSegment = segments.find((segment) => segment.start > start);
-  const endLimit = nextSegment ? Math.max(start + 0.3, nextSegment.start - 0.05) : getMediaDuration();
-  const end = Math.max(start + 0.3, Math.min(start + 2, endLimit));
+  setStatus("請按住「新增字幕段」拖曳到兩段字幕中間的空檔。");
+});
+addSegmentButton.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
 
-  commitSegmentChange("新增字幕段", () => {
-    segments.push({
-      id: crypto.randomUUID(),
-      index: segments.length + 1,
-      start,
-      end,
-      text: "新增字幕",
-    });
-  });
-  setStatus(`已在 ${formatClock(start)} 新增字幕段。`);
+  beginNewSegmentDrag(event);
+});
+
+window.addEventListener("pointermove", (event) => {
+  if (!isDraggingNewSegment) return;
+
+  if (addSegmentPointerStart) {
+    const movedDistance = Math.hypot(event.clientX - addSegmentPointerStart.x, event.clientY - addSegmentPointerStart.y);
+    addSegmentPointerStart.moved = addSegmentPointerStart.moved || movedDistance > 6;
+  }
+  setInsertDropHighlight(getInsertZoneAtPoint(event.clientX, event.clientY));
+});
+
+window.addEventListener("pointerup", (event) => {
+  if (!isDraggingNewSegment) return;
+
+  const zone = getInsertZoneAtPoint(event.clientX, event.clientY);
+  const moved = addSegmentPointerStart?.moved === true;
+  if (zone) {
+    insertSubtitleBetween(zone.dataset.previousId, zone.dataset.nextId);
+  } else if (moved) {
+    setStatus("未放在兩段字幕中間，沒有新增字幕段。", true);
+  }
+  endNewSegmentDrag();
 });
 
 undoButton.addEventListener("click", undoLastAction);
@@ -413,10 +432,37 @@ function renderSegments() {
     contentBox.append(textarea, splitGuide, tools);
     item.append(timeBox, contentBox);
     segmentsList.append(item);
+
+    const nextSegment = segments[segmentIndex + 1];
+    if (nextSegment) {
+      segmentsList.append(createInsertDropZone(segment, nextSegment));
+    }
   }
 
   markActiveSegment();
   renderQualityIssues();
+}
+
+function createInsertDropZone(previousSegment, nextSegment) {
+  const zone = document.createElement("li");
+  zone.className = "insert-zone";
+  zone.dataset.previousId = previousSegment.id;
+  zone.dataset.nextId = nextSegment.id;
+
+  const slot = getSubtitleInsertSlot(segments, previousSegment.id, nextSegment.id);
+  const canInsert = Boolean(slot);
+  zone.classList.toggle("is-available", canInsert);
+  zone.classList.toggle("is-unavailable", !canInsert);
+  zone.title = canInsert
+    ? `拖放新增字幕：${formatClock(slot.start)} - ${formatClock(slot.end)}`
+    : "這兩段字幕中間沒有可用時間，無法新增。";
+
+  const label = document.createElement("span");
+  label.className = "insert-zone-label";
+  label.textContent = canInsert ? `新增空白字幕 ${formatDuration(slot.end - slot.start)}` : "無空檔";
+  zone.append(label);
+
+  return zone;
 }
 
 function changeSegmentStart(segmentId, value, options = {}) {
@@ -735,6 +781,25 @@ function splitSegmentAtTextIndex(segmentId, characterIndex) {
   setStatus("已從點選文字前拆分字幕段，點選的文字已移到下一段。");
 }
 
+function insertSubtitleBetween(previousSegmentId, nextSegmentId) {
+  const slot = getSubtitleInsertSlot(segments, previousSegmentId, nextSegmentId);
+  if (!slot) {
+    setStatus("這兩段字幕中間沒有可用時間，無法新增。", true);
+    return;
+  }
+
+  commitSegmentChange("新增字幕段", () => {
+    segments.splice(slot.index, 0, {
+      id: crypto.randomUUID(),
+      index: slot.index + 1,
+      start: slot.start,
+      end: slot.end,
+      text: "新增字幕",
+    });
+  });
+  setStatus(`已在 ${formatClock(slot.start)} - ${formatClock(slot.end)} 新增字幕段。`);
+}
+
 function mergeWithNextSegment(segmentId) {
   const index = segments.findIndex((segment) => segment.id === segmentId);
   if (index === -1 || index >= segments.length - 1) return;
@@ -766,6 +831,43 @@ function shiftSegment(segmentId, delta) {
     segment.end += effectiveDelta;
   });
   setStatus(`已${effectiveDelta > 0 ? "延後" : "提前"}這段字幕 ${Math.abs(effectiveDelta).toFixed(1)} 秒。`);
+}
+
+function beginNewSegmentDrag(event) {
+  if (!selectedFile || segments.length < 2) {
+    event.preventDefault();
+    setStatus("需要至少兩段字幕，才能拖曳到中間新增。", true);
+    return false;
+  }
+
+  isDraggingNewSegment = true;
+  addSegmentPointerStart = "clientX" in event ? { x: event.clientX, y: event.clientY, moved: false } : null;
+  document.body.classList.add("is-adding-segment");
+  setStatus("拖曳到兩段字幕中間的空檔放開即可新增。");
+  return true;
+}
+
+function endNewSegmentDrag() {
+  isDraggingNewSegment = false;
+  addSegmentPointerStart = null;
+  document.body.classList.remove("is-adding-segment");
+  clearInsertDropHighlights();
+}
+
+function getInsertZoneAtPoint(x, y) {
+  return document.elementFromPoint(x, y)?.closest(".insert-zone") ?? null;
+}
+
+function setInsertDropHighlight(activeZone) {
+  for (const zone of segmentsList.querySelectorAll(".insert-zone")) {
+    zone.classList.toggle("is-drag-over", zone === activeZone);
+  }
+}
+
+function clearInsertDropHighlights() {
+  for (const zone of segmentsList.querySelectorAll(".insert-zone")) {
+    zone.classList.remove("is-drag-over");
+  }
 }
 
 function shiftAllSegments(delta) {
