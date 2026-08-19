@@ -19,6 +19,7 @@ const segmentCount = document.querySelector("#segmentCount");
 const addSegmentButton = document.querySelector("#addSegmentButton");
 const undoButton = document.querySelector("#undoButton");
 const redoButton = document.querySelector("#redoButton");
+const shiftAllButtons = Array.from(document.querySelectorAll("[data-shift-all]"));
 const progressPanel = document.querySelector("#progressPanel");
 const progressLabel = document.querySelector("#progressLabel");
 const progressPercent = document.querySelector("#progressPercent");
@@ -99,6 +100,7 @@ mediaInput.addEventListener("change", () => {
   transcribeButton.disabled = !hasApiKey;
   exportButton.disabled = segments.length === 0;
   exportFormat.disabled = segments.length === 0;
+  enableOutputControls();
   hideProgress();
   if (savedProject) {
     setStatus(`已接回 ${file.name} 的本機字幕專案。`);
@@ -137,6 +139,10 @@ addSegmentButton.addEventListener("click", () => {
 
 undoButton.addEventListener("click", undoLastAction);
 redoButton.addEventListener("click", redoLastAction);
+
+for (const button of shiftAllButtons) {
+  button.addEventListener("click", () => shiftAllSegments(Number(button.dataset.shiftAll)));
+}
 
 transcribeButton.addEventListener("click", async () => {
   if (!selectedFile) return;
@@ -247,6 +253,7 @@ shutdownButton.addEventListener("click", async () => {
   addSegmentButton.disabled = true;
   undoButton.disabled = true;
   redoButton.disabled = true;
+  for (const button of shiftAllButtons) button.disabled = true;
   transcribeButton.disabled = true;
   exportButton.disabled = true;
   exportFormat.disabled = true;
@@ -347,6 +354,9 @@ function renderSegments() {
     const actions = document.createElement("div");
     actions.className = "segment-actions";
 
+    const nudgeBackButton = createNudgeButton("-0.1s", segment.id, -0.1);
+    const nudgeForwardButton = createNudgeButton("+0.1s", segment.id, 0.1);
+
     const splitButton = document.createElement("button");
     splitButton.type = "button";
     splitButton.textContent = "拆分";
@@ -371,7 +381,7 @@ function renderSegments() {
       saveProjectNow();
     });
 
-    actions.append(splitButton, mergeButton, deleteButton);
+    actions.append(nudgeBackButton, nudgeForwardButton, splitButton, mergeButton, deleteButton);
     tools.append(duration, actions);
     contentBox.append(textarea, splitGuide, tools);
     item.append(timeBox, contentBox);
@@ -388,6 +398,15 @@ function createTimeInput(value, onChange) {
   input.inputMode = "decimal";
   input.addEventListener("change", () => onChange(parseTime(input.value)));
   return input;
+}
+
+function createNudgeButton(label, segmentId, delta) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.title = `${delta > 0 ? "延後" : "提前"}這段字幕 ${Math.abs(delta).toFixed(1)} 秒`;
+  button.addEventListener("click", () => shiftSegment(segmentId, delta));
+  return button;
 }
 
 function updateActiveCaption() {
@@ -659,6 +678,49 @@ function mergeWithNextSegment(segmentId) {
   setStatus("已合併下一段字幕。");
 }
 
+function shiftSegment(segmentId, delta) {
+  const segment = segments.find((candidate) => candidate.id === segmentId);
+  if (!segment) return;
+
+  const effectiveDelta = Math.max(delta, -segment.start);
+  if (effectiveDelta === 0) {
+    setStatus("這段字幕已經在 0 秒，不能再往前。", true);
+    return;
+  }
+
+  pushUndoSnapshot("微調單段時間");
+  segment.start += effectiveDelta;
+  segment.end += effectiveDelta;
+  normalizeSegmentOrder();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  setStatus(`已${effectiveDelta > 0 ? "延後" : "提前"}這段字幕 ${Math.abs(effectiveDelta).toFixed(1)} 秒。`);
+}
+
+function shiftAllSegments(delta) {
+  if (segments.length === 0) return;
+
+  const earliestStart = Math.min(...segments.map((segment) => segment.start));
+  const effectiveDelta = Math.max(delta, -earliestStart);
+  if (effectiveDelta === 0) {
+    setStatus("最前面的字幕已經在 0 秒，不能再整體提前。", true);
+    return;
+  }
+
+  pushUndoSnapshot("微調整體時間");
+  segments = segments.map((segment) => ({
+    ...segment,
+    start: segment.start + effectiveDelta,
+    end: segment.end + effectiveDelta,
+  }));
+  normalizeSegmentOrder();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  setStatus(`已整體${effectiveDelta > 0 ? "延後" : "提前"}字幕 ${Math.abs(effectiveDelta).toFixed(1)} 秒。`);
+}
+
 function splitText(text) {
   const trimmed = text.trim();
   if (trimmed.length < 2) return [trimmed, "新增字幕", 1];
@@ -707,6 +769,7 @@ function enableOutputControls() {
   exportButton.disabled = !hasSegments;
   exportFormat.disabled = !hasSegments;
   exportProjectButton.disabled = !hasSegments;
+  for (const button of shiftAllButtons) button.disabled = !hasSegments;
 }
 
 function pushUndoSnapshot(label) {
