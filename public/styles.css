@@ -277,6 +277,17 @@ video {
   padding-top: 12px;
 }
 
+.status-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  white-space: nowrap;
+}
+
+#projectStatus {
+  color: var(--muted);
+}
+
 #timeText {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -403,6 +414,12 @@ video {
 
   .actions {
     justify-content: flex-start;
+  }
+
+  .status-row,
+  .status-meta {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .content-grid {

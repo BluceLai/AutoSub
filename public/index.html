@@ -20,6 +20,9 @@
               <input id="mediaInput" type="file" accept="video/*,audio/*" />
               選擇影片
             </label>
+            <button id="importProjectButton" class="secondary-button" type="button" disabled>匯入專案</button>
+            <input id="projectInput" type="file" accept=".json,application/json" hidden />
+            <button id="exportProjectButton" class="secondary-button" type="button" disabled>匯出專案</button>
             <button id="demoButton" class="secondary-button" type="button" disabled>載入測試字幕</button>
             <button id="transcribeButton" type="button" disabled>產生字幕</button>
             <select id="exportFormat" class="format-select" aria-label="匯出格式" disabled>
@@ -50,7 +53,10 @@
             </div>
             <div class="status-row">
               <span id="statusText">請先選擇影片或音訊檔。</span>
-              <span id="timeText">00:00.000</span>
+              <span class="status-meta">
+                <span id="projectStatus">尚未建立專案</span>
+                <span id="timeText">00:00.000</span>
+              </span>
             </div>
           </section>
 

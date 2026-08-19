@@ -1,5 +1,8 @@
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
+const projectInput = document.querySelector("#projectInput");
+const importProjectButton = document.querySelector("#importProjectButton");
+const exportProjectButton = document.querySelector("#exportProjectButton");
 const demoButton = document.querySelector("#demoButton");
 const transcribeButton = document.querySelector("#transcribeButton");
 const exportButton = document.querySelector("#exportButton");
@@ -7,6 +10,7 @@ const exportFormat = document.querySelector("#exportFormat");
 const shutdownButton = document.querySelector("#shutdownButton");
 const statusText = document.querySelector("#statusText");
 const keyStatus = document.querySelector("#keyStatus");
+const projectStatus = document.querySelector("#projectStatus");
 const timeText = document.querySelector("#timeText");
 const captionOverlay = document.querySelector("#captionOverlay");
 const segmentsList = document.querySelector("#segmentsList");
@@ -23,6 +27,8 @@ let mediaUrl = null;
 let segments = [];
 let activeSegmentId = null;
 let hasApiKey = false;
+let currentProjectKey = null;
+let saveTimer = null;
 
 checkHealth();
 
@@ -33,17 +39,31 @@ mediaInput.addEventListener("change", () => {
   selectedFile = file;
   segments = [];
   activeSegmentId = null;
+  currentProjectKey = getProjectKey(file);
 
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
   mediaUrl = URL.createObjectURL(file);
   mediaPlayer.src = mediaUrl;
 
+  const savedProject = loadSavedProject(currentProjectKey);
+  if (savedProject) {
+    segments = savedProject.segments;
+  }
+
+  importProjectButton.disabled = false;
+  exportProjectButton.disabled = segments.length === 0;
   demoButton.disabled = false;
   transcribeButton.disabled = !hasApiKey;
-  exportButton.disabled = true;
-  exportFormat.disabled = true;
+  exportButton.disabled = segments.length === 0;
+  exportFormat.disabled = segments.length === 0;
   hideProgress();
-  setStatus(hasApiKey ? `已選擇 ${file.name}，可以開始產生字幕。` : `已選擇 ${file.name}。尚未設定 API key，可先載入測試字幕。`);
+  if (savedProject) {
+    setStatus(`已接回 ${file.name} 的本機字幕專案。`);
+    setProjectStatus(`上次儲存：${formatSavedAt(savedProject.savedAt)}`);
+  } else {
+    setStatus(hasApiKey ? `已選擇 ${file.name}，可以開始產生字幕。` : `已選擇 ${file.name}。尚未設定 API key，可先載入測試字幕。`);
+    setProjectStatus("尚未建立字幕專案");
+  }
   renderSegments();
   updateActiveCaption();
 });
@@ -65,6 +85,8 @@ transcribeButton.addEventListener("click", async () => {
     setStatus(`完成：產生 ${segments.length} 段字幕。`);
     exportButton.disabled = segments.length === 0;
     exportFormat.disabled = segments.length === 0;
+    exportProjectButton.disabled = segments.length === 0;
+    saveProjectNow();
     renderSegments();
     updateActiveCaption();
   } catch (error) {
@@ -85,8 +107,48 @@ demoButton.addEventListener("click", () => {
   setStatus(`已載入 ${segments.length} 段測試字幕，不會消耗 OpenAI 用量。`);
   exportButton.disabled = false;
   exportFormat.disabled = false;
+  exportProjectButton.disabled = false;
+  saveProjectNow();
   renderSegments();
   updateActiveCaption();
+});
+
+importProjectButton.addEventListener("click", () => {
+  projectInput.click();
+});
+
+projectInput.addEventListener("change", async () => {
+  const file = projectInput.files?.[0];
+  projectInput.value = "";
+  if (!file || !selectedFile) return;
+
+  try {
+    const project = parseProject(await file.text());
+    const importedName = project.file?.name;
+    if (importedName && importedName !== selectedFile.name) {
+      const shouldImport = window.confirm(`這份專案原本對應「${importedName}」，目前影片是「${selectedFile.name}」。仍要匯入嗎？`);
+      if (!shouldImport) return;
+    }
+
+    segments = project.segments;
+    exportButton.disabled = segments.length === 0;
+    exportFormat.disabled = segments.length === 0;
+    exportProjectButton.disabled = segments.length === 0;
+    saveProjectNow();
+    renderSegments();
+    updateActiveCaption();
+    setProgress("專案已匯入", 100);
+    setStatus(`已匯入 ${segments.length} 段字幕專案。`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "專案匯入失敗。", true);
+  }
+});
+
+exportProjectButton.addEventListener("click", () => {
+  if (!selectedFile || segments.length === 0) return;
+
+  const baseName = selectedFile.name.replace(/\.[^.]+$/, "");
+  downloadText(`${baseName}.autosub.json`, JSON.stringify(createProjectPayload(), null, 2), "application/json;charset=utf-8");
 });
 
 exportButton.addEventListener("click", () => {
@@ -110,6 +172,8 @@ shutdownButton.addEventListener("click", async () => {
 
   shutdownButton.disabled = true;
   demoButton.disabled = true;
+  importProjectButton.disabled = true;
+  exportProjectButton.disabled = true;
   transcribeButton.disabled = true;
   exportButton.disabled = true;
   exportFormat.disabled = true;
@@ -153,12 +217,14 @@ function renderSegments() {
 
     const startInput = createTimeInput(segment.start, (value) => {
       segment.start = clampTime(value, 0, segment.end);
+      scheduleSaveProject();
       renderSegments();
       updateActiveCaption();
     });
 
     const endInput = createTimeInput(segment.end, (value) => {
       segment.end = Math.max(value, segment.start);
+      scheduleSaveProject();
       renderSegments();
       updateActiveCaption();
     });
@@ -170,6 +236,7 @@ function renderSegments() {
     textarea.value = segment.text;
     textarea.addEventListener("input", () => {
       segment.text = textarea.value;
+      scheduleSaveProject();
       updateActiveCaption();
     });
 
@@ -189,6 +256,8 @@ function renderSegments() {
       updateActiveCaption();
       exportButton.disabled = segments.length === 0;
       exportFormat.disabled = segments.length === 0;
+      exportProjectButton.disabled = segments.length === 0;
+      saveProjectNow();
     });
 
     tools.append(duration, deleteButton);
@@ -228,6 +297,10 @@ function setStatus(message, isWarning = false) {
   statusText.classList.toggle("warning", isWarning);
 }
 
+function setProjectStatus(message) {
+  projectStatus.textContent = message;
+}
+
 async function checkHealth() {
   try {
     const response = await fetch("/api/health");
@@ -243,6 +316,88 @@ async function checkHealth() {
     keyStatus.textContent = "無法連線到本機服務";
     transcribeButton.disabled = true;
   }
+}
+
+function getProjectKey(file) {
+  return `autosub:project:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function loadSavedProject(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return parseProject(raw);
+  } catch {
+    return null;
+  }
+}
+
+function scheduleSaveProject() {
+  if (!selectedFile || segments.length === 0) return;
+  setProjectStatus("儲存中...");
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveProjectNow, 350);
+}
+
+function saveProjectNow() {
+  if (!selectedFile || !currentProjectKey || segments.length === 0) {
+    setProjectStatus("尚未建立字幕專案");
+    return;
+  }
+
+  const payload = createProjectPayload();
+  localStorage.setItem(currentProjectKey, JSON.stringify(payload));
+  setProjectStatus(`已自動儲存 ${formatSavedAt(payload.savedAt)}`);
+}
+
+function createProjectPayload() {
+  return {
+    app: "AutoSub",
+    version: 1,
+    savedAt: new Date().toISOString(),
+    file: selectedFile
+      ? {
+          name: selectedFile.name,
+          size: selectedFile.size,
+          lastModified: selectedFile.lastModified,
+          type: selectedFile.type,
+          duration: Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : null,
+        }
+      : null,
+    segments: segments.map((segment, index) => ({
+      id: segment.id || crypto.randomUUID(),
+      index: index + 1,
+      start: Number(segment.start),
+      end: Number(segment.end),
+      text: String(segment.text ?? ""),
+    })),
+  };
+}
+
+function parseProject(raw) {
+  const project = JSON.parse(raw);
+  if (project?.app !== "AutoSub" || project?.version !== 1 || !Array.isArray(project.segments)) {
+    throw new Error("這不是 AutoSub 專案檔。");
+  }
+
+  return {
+    ...project,
+    segments: project.segments
+      .map((segment, index) => ({
+        id: typeof segment.id === "string" ? segment.id : crypto.randomUUID(),
+        index: index + 1,
+        start: Number(segment.start),
+        end: Number(segment.end),
+        text: String(segment.text ?? "").trim(),
+      }))
+      .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.text),
+  };
+}
+
+function formatSavedAt(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return "剛剛";
+  return date.toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function setProgress(label, percent, options = {}) {
@@ -335,7 +490,9 @@ function downloadText(fileName, content, type) {
   const link = document.createElement("a");
   link.href = url;
   link.download = fileName;
+  document.body.append(link);
   link.click();
+  link.remove();
   URL.revokeObjectURL(url);
 }
 
