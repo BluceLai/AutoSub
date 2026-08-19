@@ -7,6 +7,7 @@
 - Node.js 22 或更新版本
 - OpenAI API key
 - ffmpeg，影片轉錄時會先在本機抽出音訊
+- 選用：離線轉錄 PoC 需要另外安裝 `whisper.cpp` 或 `faster-whisper`，目前建議先驗證 `whisper.cpp`
 
 ## 啟動
 
@@ -37,6 +38,7 @@
 - 目前已有字幕段落時，重新產生字幕前會先要求確認，避免重複消耗 OpenAI 用量
 - 顯示上傳與轉錄處理進度，包含本機抽音訊、送 OpenAI、建立字幕與完成階段
 - 長影片會依固定時間區間分段轉錄，每段完成後保存文字與時間碼結果，失敗後可從未完成段落續跑
+- 提供離線轉錄引擎偵測指令，可檢查這台電腦是否已安裝 `whisper.cpp` / `faster-whisper`
 - 播放時同步顯示目前字幕
 - 可開關跟隨播放，讓右側字幕列表自動對齊目前播放段落
 - 顯示字幕品質檢查，提示時間重疊、過短、過長、文字空白與閱讀速度偏快
@@ -105,6 +107,24 @@ npm run sample:audio
 winget install Gyan.FFmpeg
 ```
 
+## 離線轉錄 PoC
+
+目前離線模式仍在 PoC 階段，尚未接進 UI 的「產生字幕」。研究結論建議第一個整合 `whisper.cpp`，因為它有 Windows 可用的 CLI，能直接輸出 SRT / VTT / JSON，比 `faster-whisper` 少一層 Python worker 發佈成本。
+
+檢查這台電腦是否已具備離線轉錄引擎：
+
+```bash
+npm run offline:check
+```
+
+`whisper.cpp` 若已安裝，請先讓 `whisper-cli` 可被 PATH 找到，並設定模型路徑：
+
+```text
+AUTOSUB_WHISPER_CPP_MODEL=C:\path\to\ggml-small.bin
+```
+
+完整比較與建議請看 `docs/offline-transcription-poc.md`。
+
 ## 驗證
 
 執行純函式測試：
@@ -121,7 +141,7 @@ npm run check
 
 ## 設計取捨
 
-這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；影片轉錄時會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API。音訊檔則直接送到 OpenAI。
+這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；影片轉錄時會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API。音訊檔則直接送到 OpenAI。離線轉錄目前只完成研究與本機環境偵測，尚未取代 OpenAI 主流程。
 
 正式產生字幕時，瀏覽器會先把檔案上傳到本機 server，server 建立一個轉錄工作並用 server-sent events 回報階段進度。長影片會切成 5 分鐘一段逐段轉錄，每段完成後只保存轉錄文字與時間碼結果到 `.autosub-work/`，不保存影片或音訊。
 

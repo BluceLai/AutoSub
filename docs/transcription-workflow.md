@@ -25,6 +25,16 @@ npm run sample:audio
 
 若要測影片預覽或剪輯流程，再使用 20 秒影片測試片。
 
+## 離線轉錄 PoC
+
+離線轉錄目前先完成研究與本機引擎偵測，尚未接進正式產生字幕流程。第一個建議整合的離線引擎是 `whisper.cpp`，因為它有可直接由 Node server 呼叫的 CLI，並能輸出 SRT / VTT / JSON。
+
+```bash
+npm run offline:check
+```
+
+研究文件：`docs/offline-transcription-poc.md`。
+
 ## 參考影片與 whatSub 啟發的互動重點
 
 - 產生字幕後要直接進入「影片預覽 + 字幕編輯」工作區，不做行銷式首頁。
@@ -44,6 +54,6 @@ npm run sample:audio
 
 ## 後續候選
 
-- 離線轉錄引擎，例如 whisper.cpp 或 faster-whisper。
+- 將 `whisper.cpp` 離線轉錄接進正式產生字幕流程。
 - 雲端 / 離線轉錄模式切換。
 - YouTube 網址匯入，但需要先確認授權、下載方式與公司政策。
