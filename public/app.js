@@ -17,11 +17,14 @@ const segmentsList = document.querySelector("#segmentsList");
 const emptyState = document.querySelector("#emptyState");
 const segmentCount = document.querySelector("#segmentCount");
 const addSegmentButton = document.querySelector("#addSegmentButton");
+const undoButton = document.querySelector("#undoButton");
+const redoButton = document.querySelector("#redoButton");
 const progressPanel = document.querySelector("#progressPanel");
 const progressLabel = document.querySelector("#progressLabel");
 const progressPercent = document.querySelector("#progressPercent");
 const progressTrack = document.querySelector(".progress-track");
 const progressBar = document.querySelector("#progressBar");
+const maxUndoSteps = 10;
 
 let selectedFile = null;
 let mediaUrl = null;
@@ -31,10 +34,32 @@ let hasApiKey = false;
 let currentProjectKey = null;
 let saveTimer = null;
 let splitMode = false;
+let undoStack = [];
+let redoStack = [];
+let textEditSnapshotSegmentId = null;
+let textEditSnapshotTaken = false;
 
 checkHealth();
 
 window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "z" && !isEditableTarget(event.target)) {
+    event.preventDefault();
+    redoLastAction();
+    return;
+  }
+
+  if (event.ctrlKey && event.key.toLowerCase() === "z" && !isEditableTarget(event.target)) {
+    event.preventDefault();
+    undoLastAction();
+    return;
+  }
+
+  if (event.ctrlKey && event.key.toLowerCase() === "y" && !isEditableTarget(event.target)) {
+    event.preventDefault();
+    redoLastAction();
+    return;
+  }
+
   if (event.key === "Control") {
     setSplitMode(true);
   }
@@ -56,6 +81,7 @@ mediaInput.addEventListener("change", () => {
   segments = [];
   activeSegmentId = null;
   currentProjectKey = getProjectKey(file);
+  clearUndoHistory();
 
   if (mediaUrl) URL.revokeObjectURL(mediaUrl);
   mediaUrl = URL.createObjectURL(file);
@@ -93,6 +119,7 @@ addSegmentButton.addEventListener("click", () => {
   const endLimit = nextSegment ? Math.max(start + 0.3, nextSegment.start - 0.05) : getMediaDuration();
   const end = Math.max(start + 0.3, Math.min(start + 2, endLimit));
 
+  pushUndoSnapshot("新增字幕段");
   segments.push({
     id: crypto.randomUUID(),
     index: segments.length + 1,
@@ -108,6 +135,9 @@ addSegmentButton.addEventListener("click", () => {
   setStatus(`已在 ${formatClock(start)} 新增字幕段。`);
 });
 
+undoButton.addEventListener("click", undoLastAction);
+redoButton.addEventListener("click", redoLastAction);
+
 transcribeButton.addEventListener("click", async () => {
   if (!selectedFile) return;
 
@@ -120,6 +150,7 @@ transcribeButton.addEventListener("click", async () => {
   try {
     const payload = await transcribeWithProgress(selectedFile);
 
+    pushUndoSnapshot("產生字幕");
     segments = payload.segments.map((segment) => ({ ...segment }));
     normalizeSegmentOrder();
     setProgress("完成", 100);
@@ -141,6 +172,7 @@ demoButton.addEventListener("click", () => {
   if (!selectedFile) return;
 
   const duration = Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : 20;
+  pushUndoSnapshot("載入測試字幕");
   segments = createDemoSegments(Math.min(duration, 20));
   normalizeSegmentOrder();
   setProgress("測試字幕已載入", 100);
@@ -168,6 +200,7 @@ projectInput.addEventListener("change", async () => {
       if (!shouldImport) return;
     }
 
+    pushUndoSnapshot("匯入專案");
     segments = project.segments;
     normalizeSegmentOrder();
     enableOutputControls();
@@ -212,6 +245,8 @@ shutdownButton.addEventListener("click", async () => {
   importProjectButton.disabled = true;
   exportProjectButton.disabled = true;
   addSegmentButton.disabled = true;
+  undoButton.disabled = true;
+  redoButton.disabled = true;
   transcribeButton.disabled = true;
   exportButton.disabled = true;
   exportFormat.disabled = true;
@@ -255,14 +290,20 @@ function renderSegments() {
     });
 
     const startInput = createTimeInput(segment.start, (value) => {
-      segment.start = clampTime(value, 0, segment.end);
+      const nextStart = clampTime(value, 0, segment.end);
+      if (nextStart === segment.start) return;
+      pushUndoSnapshot("修改開始時間");
+      segment.start = nextStart;
       scheduleSaveProject();
       renderSegments();
       updateActiveCaption();
     });
 
     const endInput = createTimeInput(segment.end, (value) => {
-      segment.end = Math.max(value, segment.start);
+      const nextEnd = Math.max(value, segment.start);
+      if (nextEnd === segment.end) return;
+      pushUndoSnapshot("修改結束時間");
+      segment.end = nextEnd;
       scheduleSaveProject();
       renderSegments();
       updateActiveCaption();
@@ -274,10 +315,25 @@ function renderSegments() {
     contentBox.className = "segment-content";
     const textarea = document.createElement("textarea");
     textarea.value = segment.text;
+    textarea.addEventListener("focus", () => {
+      textEditSnapshotSegmentId = segment.id;
+      textEditSnapshotTaken = false;
+    });
     textarea.addEventListener("input", () => {
+      if (!textEditSnapshotTaken || textEditSnapshotSegmentId !== segment.id) {
+        pushUndoSnapshot("修改文字");
+        textEditSnapshotSegmentId = segment.id;
+        textEditSnapshotTaken = true;
+      }
       segment.text = textarea.value;
       scheduleSaveProject();
       updateActiveCaption();
+    });
+    textarea.addEventListener("blur", () => {
+      if (textEditSnapshotSegmentId === segment.id) {
+        textEditSnapshotSegmentId = null;
+        textEditSnapshotTaken = false;
+      }
     });
 
     const splitGuide = createSplitGuide(segment);
@@ -307,6 +363,7 @@ function renderSegments() {
     deleteButton.type = "button";
     deleteButton.textContent = "刪除";
     deleteButton.addEventListener("click", () => {
+      pushUndoSnapshot("刪除字幕段");
       segments = segments.filter((candidate) => candidate.id !== segment.id);
       renderSegments();
       updateActiveCaption();
@@ -360,8 +417,11 @@ function setSplitMode(enabled) {
   if (splitMode === enabled) return;
   splitMode = enabled;
   document.body.classList.toggle("is-split-mode", enabled);
+  for (const guide of segmentsList.querySelectorAll(".split-guide")) {
+    guide.setAttribute("aria-hidden", enabled ? "false" : "true");
+  }
   if (enabled && segments.length > 0) {
-    setStatus("Ctrl 拆分模式：點字幕文字下方的小圓點即可從該字後拆分。");
+    setStatus("Ctrl 拆分模式：文字框已暫時隱藏，點字下方小點即可拆分。");
   }
 }
 
@@ -411,6 +471,7 @@ function splitSegment(segmentId) {
     playhead > segment.start + 0.2 && playhead < segment.end - 0.2 ? playhead : segment.start + duration / 2;
   const [firstText, secondText] = splitText(segment.text);
 
+  pushUndoSnapshot("拆分字幕段");
   segments.splice(
     index,
     1,
@@ -456,6 +517,7 @@ function splitSegmentAtTextIndex(segmentId, characterIndex) {
   const firstText = characters.slice(0, characterIndex).join("").trim();
   const secondText = characters.slice(characterIndex).join("").trim();
 
+  pushUndoSnapshot("拆分字幕段");
   segments.splice(
     index,
     1,
@@ -485,6 +547,7 @@ function mergeWithNextSegment(segmentId) {
 
   const current = segments[index];
   const next = segments[index + 1];
+  pushUndoSnapshot("合併字幕段");
   segments.splice(index, 2, {
     ...current,
     end: Math.max(current.end, next.end),
@@ -533,6 +596,82 @@ function enableOutputControls() {
   exportButton.disabled = !hasSegments;
   exportFormat.disabled = !hasSegments;
   exportProjectButton.disabled = !hasSegments;
+}
+
+function pushUndoSnapshot(label) {
+  undoStack.push({
+    label,
+    segments: cloneSegments(segments),
+  });
+  if (undoStack.length > maxUndoSteps) undoStack.shift();
+  redoStack = [];
+  updateHistoryButtons();
+}
+
+function undoLastAction() {
+  const snapshot = undoStack.pop();
+  if (!snapshot) return;
+
+  redoStack.push({
+    label: snapshot.label,
+    segments: cloneSegments(segments),
+  });
+  if (redoStack.length > maxUndoSteps) redoStack.shift();
+
+  segments = cloneSegments(snapshot.segments);
+  normalizeSegmentOrder();
+  enableOutputControls();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  updateHistoryButtons();
+  setStatus(`已復原：${snapshot.label}`);
+}
+
+function redoLastAction() {
+  const snapshot = redoStack.pop();
+  if (!snapshot) return;
+
+  undoStack.push({
+    label: snapshot.label,
+    segments: cloneSegments(segments),
+  });
+  if (undoStack.length > maxUndoSteps) undoStack.shift();
+
+  segments = cloneSegments(snapshot.segments);
+  normalizeSegmentOrder();
+  enableOutputControls();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  updateHistoryButtons();
+  setStatus(`已重做：${snapshot.label}`);
+}
+
+function cloneSegments(items) {
+  return items.map((segment) => ({ ...segment }));
+}
+
+function clearUndoHistory() {
+  undoStack = [];
+  redoStack = [];
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  undoButton.disabled = undoStack.length === 0;
+  undoButton.textContent = undoStack.length > 0 ? `復原 (${undoStack.length})` : "復原";
+  redoButton.disabled = redoStack.length === 0;
+  redoButton.textContent = redoStack.length > 0 ? `重做 (${redoStack.length})` : "重做";
+}
+
+function isEditableTarget(target) {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target?.isContentEditable === true
+  );
 }
 
 function getMediaDuration() {
