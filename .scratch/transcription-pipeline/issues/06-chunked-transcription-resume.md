@@ -4,9 +4,17 @@
 
 **Blocked by:** 03 — 參考 whatSub 式階段進度; 04 — 避免重複產生字幕.
 
-**Status:** ready-for-agent
+**Status:** implemented; needs API-key long-media verification
 
-- [ ] 長影片轉錄可以依固定時間區間分段。
-- [ ] 每段完成後可保存中間結果。
-- [ ] 失敗後可從未完成段落續跑。
-- [ ] 合併後的字幕時間碼仍對齊原影片時間。
+- [x] 長影片轉錄可以依固定時間區間分段。
+- [x] 每段完成後可保存中間結果。
+- [x] 失敗後可從未完成段落續跑。
+- [x] 合併後的字幕時間碼仍對齊原影片時間。
+- [ ] 尚未用真實 OpenAI API key 跑長影片驗證。
+
+## Verification
+
+- 2026-08-19: `npm run check` passed with 67 tests.
+- 2026-08-19: local server health check passed on a floating port with `hasFfmpeg: true`.
+- 2026-08-19: missing `OPENAI_API_KEY` request returned before transcription, so no OpenAI usage occurred.
+- 2026-08-19: `npm run sample:audio` produced a 10-second MP3 sample for minimal online smoke testing.

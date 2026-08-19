@@ -2,10 +2,22 @@ import { createServer } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, join, normalize, resolve } from "node:path";
+import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  createAudioChunkArgs,
+  createChunkCacheFileName,
+  createChunkPlan,
+  createEmptyChunkCache,
+  defaultChunkSeconds,
+  mergeChunkResults,
+  offsetSegments,
+  recordCompletedChunk,
+  restoreCompletedChunkResults,
+  shouldChunkTranscription,
+} from "./chunked-transcription.mjs";
 import { findCommand } from "./command-path.mjs";
 import {
   createAudioExtractionArgs,
@@ -23,6 +35,7 @@ import {
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const publicDir = join(rootDir, "public");
+const transcriptionCacheDir = join(rootDir, ".autosub-work", "transcriptions");
 const maxUploadBytes = 512 * 1024 * 1024;
 const transcriptionJobs = new Map();
 const jobRetentionMs = 15 * 60 * 1000;
@@ -128,6 +141,9 @@ async function handleTranscribe(req, res) {
   const fileName = sanitizeFileName(decodeURIComponent(String(req.headers["x-file-name"] || "media.mp4")));
   const model = String(req.headers["x-transcription-model"] || "whisper-1");
   const prompt = String(req.headers["x-transcription-prompt"] || "請以台灣繁體中文轉錄，保留自然標點，專有名詞盡量使用原文。");
+  const projectKey = decodeHeaderValue(req.headers["x-project-key"]) || `${fileName}:${contentLength}`;
+  const mediaDuration = parsePositiveNumber(req.headers["x-media-duration"]);
+  const chunkSeconds = parsePositiveNumber(req.headers["x-chunk-seconds"]) ?? defaultChunkSeconds;
   const buffer = await readRequestBody(req, maxUploadBytes);
 
   if (buffer.byteLength === 0) {
@@ -136,7 +152,21 @@ async function handleTranscribe(req, res) {
   }
 
   try {
-    sendJson(res, 200, await createTranscriptionResult({ apiKey, buffer, contentType, fileName, model, prompt }));
+    sendJson(
+      res,
+      200,
+      await createTranscriptionResult({
+        apiKey,
+        buffer,
+        contentType,
+        fileName,
+        model,
+        prompt,
+        projectKey,
+        mediaDuration,
+        chunkSeconds,
+      }),
+    );
   } catch (error) {
     sendJson(res, error?.statusCode ?? 500, createErrorPayload(error));
   }
@@ -165,6 +195,9 @@ async function handleCreateTranscriptionJob(req, res) {
   const fileName = sanitizeFileName(decodeURIComponent(String(req.headers["x-file-name"] || "media.mp4")));
   const model = String(req.headers["x-transcription-model"] || "whisper-1");
   const prompt = String(req.headers["x-transcription-prompt"] || "請以台灣繁體中文轉錄，保留自然標點，專有名詞盡量使用原文。");
+  const projectKey = decodeHeaderValue(req.headers["x-project-key"]) || `${fileName}:${contentLength}`;
+  const mediaDuration = parsePositiveNumber(req.headers["x-media-duration"]);
+  const chunkSeconds = parsePositiveNumber(req.headers["x-chunk-seconds"]) ?? defaultChunkSeconds;
   const buffer = await readRequestBody(req, maxUploadBytes);
 
   if (buffer.byteLength === 0) {
@@ -186,7 +219,7 @@ async function handleCreateTranscriptionJob(req, res) {
     eventsUrl: `/api/transcribe-jobs/${encodeURIComponent(job.id)}/events`,
   });
 
-  processTranscriptionJob(job, { apiKey, buffer, contentType, fileName, model, prompt });
+  processTranscriptionJob(job, { apiKey, buffer, contentType, fileName, model, prompt, projectKey, mediaDuration, chunkSeconds });
 }
 
 function handleTranscriptionJobEvents(jobId, req, res) {
@@ -263,7 +296,18 @@ function scheduleTranscriptionJobCleanup(jobId) {
   timer.unref?.();
 }
 
-async function createTranscriptionResult({ apiKey, buffer, contentType, fileName, model, prompt, publish = () => {} }) {
+async function createTranscriptionResult({
+  apiKey,
+  buffer,
+  contentType,
+  fileName,
+  model,
+  prompt,
+  projectKey,
+  mediaDuration,
+  chunkSeconds = defaultChunkSeconds,
+  publish = () => {},
+}) {
   publish({
     stage: "preparing",
     message: "正在準備檔案...",
@@ -279,6 +323,22 @@ async function createTranscriptionResult({ apiKey, buffer, contentType, fileName
 
   const upload = await prepareTranscriptionUpload({ buffer, contentType, fileName });
   const uploadMetadata = getUploadMetadata(upload);
+
+  if (shouldChunkTranscription(mediaDuration, chunkSeconds)) {
+    return createChunkedTranscriptionResult({
+      apiKey,
+      upload,
+      uploadMetadata,
+      fileName,
+      model,
+      prompt,
+      projectKey,
+      mediaDuration,
+      chunkSeconds,
+      publish,
+    });
+  }
+
   publish({
     stage: "uploading-openai",
     message: "正在送 OpenAI 辨識並產生時間碼...",
@@ -303,6 +363,126 @@ async function createTranscriptionResult({ apiKey, buffer, contentType, fileName
     upload: uploadMetadata,
     segments,
   };
+}
+
+async function createChunkedTranscriptionResult({
+  apiKey,
+  upload,
+  uploadMetadata,
+  fileName,
+  model,
+  prompt,
+  projectKey,
+  mediaDuration,
+  chunkSeconds,
+  publish,
+}) {
+  const chunks = createChunkPlan(mediaDuration, chunkSeconds);
+  const cachePath = join(
+    transcriptionCacheDir,
+    createChunkCacheFileName({
+      projectKey,
+      fileName,
+      fileSize: uploadMetadata.originalBytes,
+      model,
+      chunkSeconds,
+    }),
+  );
+  const cache =
+    (await readJsonFile(cachePath)) ??
+    createEmptyChunkCache({
+      projectKey,
+      fileName,
+      fileSize: uploadMetadata.originalBytes,
+      model,
+      chunkSeconds,
+      chunks,
+    });
+  const chunkResults = restoreCompletedChunkResults(cache, chunks);
+  const completedCount = chunkResults.filter(Boolean).length;
+
+  publish({
+    stage: completedCount > 0 ? "resuming-chunks" : "splitting-audio",
+    message:
+      completedCount > 0
+        ? `已找到 ${completedCount}/${chunks.length} 段暫存結果，將從未完成段落續跑...`
+        : `長影片將分成 ${chunks.length} 段轉錄，每段完成後會保存結果...`,
+    percent: 38,
+    upload: uploadMetadata,
+  });
+
+  if (completedCount === chunks.length) {
+    publish({
+      stage: "building-subtitles",
+      message: "已接回所有分段結果，正在合併字幕...",
+      percent: 90,
+      upload: uploadMetadata,
+    });
+    return createMergedChunkTranscriptionResult({ chunkResults, mediaDuration, model, uploadMetadata, chunks, chunkSeconds });
+  }
+
+  const ffmpeg = await findCommand("ffmpeg");
+  if (!ffmpeg) {
+    throw new Error("找不到 ffmpeg，請先安裝 ffmpeg 或改用音訊檔上傳。");
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), "autosub-chunks-"));
+  const inputPath = join(tempDir, upload.fileName);
+
+  try {
+    await writeFile(inputPath, upload.buffer);
+    for (const chunk of chunks) {
+      if (chunkResults[chunk.index]) continue;
+
+      const displayIndex = chunk.index + 1;
+      const chunkPath = join(tempDir, `chunk-${String(displayIndex).padStart(3, "0")}.mp3`);
+      publish({
+        stage: "splitting-audio",
+        message: `正在準備第 ${displayIndex}/${chunks.length} 段音訊...`,
+        percent: getChunkProgressPercent(chunk.index, chunks.length, 40, 50),
+        upload: uploadMetadata,
+      });
+      await run(ffmpeg, createAudioChunkArgs(inputPath, chunkPath, chunk));
+
+      const chunkUpload = {
+        extractedAudio: true,
+        fileName: createChunkUploadFileName(fileName, displayIndex),
+        contentType: extractedAudioContentType,
+        originalBytes: uploadMetadata.originalBytes,
+        uploadedBytes: (await stat(chunkPath)).size,
+        buffer: await readFile(chunkPath),
+      };
+      publish({
+        stage: "transcribing-chunk",
+        message: `正在送 OpenAI 轉錄第 ${displayIndex}/${chunks.length} 段...`,
+        percent: getChunkProgressPercent(chunk.index, chunks.length, 50, 85),
+        upload: getUploadMetadata(chunkUpload),
+      });
+
+      const payload = await callOpenAiTranscription({ apiKey, upload: chunkUpload, model, prompt });
+      const chunkSegments = offsetSegments(normalizeSegments(payload), chunk.start);
+      const chunkResult = {
+        text: payload.text ?? chunkSegments.map((segment) => segment.text).join(" "),
+        language: payload.language ?? "zh",
+        duration: payload.duration ?? chunk.duration,
+        segments: chunkSegments,
+      };
+      chunkResults[chunk.index] = chunkResult;
+      recordCompletedChunk(cache, chunk, chunkResult);
+      await writeJsonFile(cachePath, cache);
+    }
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+
+  publish({
+    stage: "building-subtitles",
+    message: "正在合併分段轉錄結果並建立字幕...",
+    percent: 90,
+    upload: uploadMetadata,
+  });
+
+  return createMergedChunkTranscriptionResult({ chunkResults, mediaDuration, model, uploadMetadata, chunks, chunkSeconds });
 }
 
 async function callOpenAiTranscription({ apiKey, upload, model, prompt }) {
@@ -343,6 +523,47 @@ function createErrorPayload(error) {
     error: error?.message ?? "Transcription failed",
     detail: error?.detail ?? (error instanceof Error ? error.message : String(error)),
   };
+}
+
+function createMergedChunkTranscriptionResult({ chunkResults, mediaDuration, model, uploadMetadata, chunks, chunkSeconds }) {
+  const merged = mergeChunkResults(chunkResults);
+  return {
+    text: merged.text,
+    language: merged.language,
+    duration: mediaDuration,
+    model,
+    upload: {
+      ...uploadMetadata,
+      chunked: true,
+      chunks: chunks.length,
+      chunkSeconds,
+    },
+    segments: merged.segments,
+  };
+}
+
+function getChunkProgressPercent(index, total, start, end) {
+  if (total <= 0) return start;
+  return start + ((end - start) * index) / total;
+}
+
+function createChunkUploadFileName(fileName, index) {
+  const baseName = createExtractedAudioFileName(fileName).replace(/\.[^.]*$/, "");
+  return `${baseName}-part-${String(index).padStart(3, "0")}.mp3`;
+}
+
+async function readJsonFile(filePath) {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    return null;
+  }
+}
+
+async function writeJsonFile(filePath, value) {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 function getUploadMetadata(upload) {
@@ -573,6 +794,21 @@ function parsePort(value, fallback) {
   if (value == null || value === "") return fallback;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535 ? parsed : fallback;
+}
+
+function decodeHeaderValue(value) {
+  if (value == null || value === "") return "";
+  try {
+    return decodeURIComponent(String(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function parsePositiveNumber(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function getCurrentPort() {

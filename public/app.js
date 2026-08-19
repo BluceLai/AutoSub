@@ -1420,6 +1420,10 @@ function transcribeWithProgress(file) {
     request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     request.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
     request.setRequestHeader("X-Transcription-Model", "whisper-1");
+    if (currentProjectKey) request.setRequestHeader("X-Project-Key", encodeURIComponent(currentProjectKey));
+    if (Number.isFinite(mediaPlayer.duration) && mediaPlayer.duration > 0) {
+      request.setRequestHeader("X-Media-Duration", String(mediaPlayer.duration));
+    }
 
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) {

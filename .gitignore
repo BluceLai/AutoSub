@@ -5,6 +5,7 @@ node_modules/
 dist/
 samples/output/
 .autosub-server.json
+.autosub-work/
 *.log
 .DS_Store
 Thumbs.db

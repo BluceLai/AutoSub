@@ -20,6 +20,15 @@ describe("transcription progress view", () => {
     );
   });
 
+  it("shows chunk transcription progress", () => {
+    assert.deepEqual(getTranscriptionProgressView({ stage: "transcribing-chunk", message: "正在送第 2/3 段", percent: 72 }), {
+      label: "分段轉錄中",
+      percent: 72,
+      indeterminate: true,
+      status: "正在送第 2/3 段",
+    });
+  });
+
   it("falls back to queued for unknown events", () => {
     assert.equal(getTranscriptionProgressView({ stage: "mystery" }).label, "等待處理");
   });
