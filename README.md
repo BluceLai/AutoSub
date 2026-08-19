@@ -78,6 +78,20 @@ npm run sample:clip
 winget install Gyan.FFmpeg
 ```
 
+## 驗證
+
+執行純函式測試：
+
+```bash
+npm test
+```
+
+執行語法檢查與測試：
+
+```bash
+npm run check
+```
+
 ## 設計取捨
 
 這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；轉錄時會把選取的檔案送到 OpenAI Audio Transcriptions API。
