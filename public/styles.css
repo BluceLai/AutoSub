@@ -338,6 +338,28 @@ video {
   gap: 8px;
 }
 
+.follow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #eef3f4;
+  color: var(--ink);
+  padding: 0 9px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.follow-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .timing-toolbar {
   display: flex;
   align-items: center;

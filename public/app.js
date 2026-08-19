@@ -17,6 +17,7 @@ const segmentsList = document.querySelector("#segmentsList");
 const emptyState = document.querySelector("#emptyState");
 const segmentCount = document.querySelector("#segmentCount");
 const addSegmentButton = document.querySelector("#addSegmentButton");
+const followPlaybackInput = document.querySelector("#followPlaybackInput");
 const undoButton = document.querySelector("#undoButton");
 const redoButton = document.querySelector("#redoButton");
 const shiftAllButtons = Array.from(document.querySelectorAll("[data-shift-all]"));
@@ -39,6 +40,7 @@ let undoStack = [];
 let redoStack = [];
 let textEditSnapshotSegmentId = null;
 let textEditSnapshotTaken = false;
+let followPlayback = true;
 
 checkHealth();
 
@@ -139,6 +141,16 @@ addSegmentButton.addEventListener("click", () => {
 
 undoButton.addEventListener("click", undoLastAction);
 redoButton.addEventListener("click", redoLastAction);
+
+followPlaybackInput.addEventListener("change", () => {
+  followPlayback = followPlaybackInput.checked;
+  if (followPlayback) {
+    scrollActiveSegmentIntoView({ behavior: "smooth", force: true });
+    setStatus("已開啟跟隨播放，右側字幕會自動對齊目前播放段落。");
+  } else {
+    setStatus("已關閉跟隨播放，可以手動停在想編輯的字幕段落。");
+  }
+});
 
 for (const button of shiftAllButtons) {
   button.addEventListener("click", () => shiftAllSegments(Number(button.dataset.shiftAll)));
@@ -272,7 +284,7 @@ mediaPlayer.addEventListener("timeupdate", () => {
   updateActiveCaption();
 });
 
-mediaPlayer.addEventListener("seeked", updateActiveCaption);
+mediaPlayer.addEventListener("seeked", () => updateActiveCaption({ forceScroll: true }));
 
 function renderSegments() {
   segmentCount.textContent = `${segments.length} 段`;
@@ -409,17 +421,39 @@ function createNudgeButton(label, segmentId, delta) {
   return button;
 }
 
-function updateActiveCaption() {
+function updateActiveCaption(options = {}) {
   const time = mediaPlayer.currentTime || 0;
   const active = segments.find((segment) => time >= segment.start && time <= segment.end);
-  activeSegmentId = active?.id ?? null;
+  const nextActiveSegmentId = active?.id ?? null;
+  const activeChanged = nextActiveSegmentId !== activeSegmentId;
+  activeSegmentId = nextActiveSegmentId;
   captionOverlay.innerHTML = active ? `<span>${escapeHtml(active.text)}</span>` : "";
   markActiveSegment();
+  if (activeChanged || options.forceScroll) {
+    scrollActiveSegmentIntoView({ behavior: "smooth", force: options.forceScroll });
+  }
 }
 
 function markActiveSegment() {
   for (const item of segmentsList.querySelectorAll(".segment")) {
     item.classList.toggle("is-active", item.dataset.id === activeSegmentId);
+  }
+}
+
+function scrollActiveSegmentIntoView(options = {}) {
+  if (!followPlayback || !activeSegmentId) return;
+
+  const activeItem = Array.from(segmentsList.querySelectorAll(".segment")).find((item) => item.dataset.id === activeSegmentId);
+  if (!activeItem) return;
+
+  const listRect = segmentsList.getBoundingClientRect();
+  const itemRect = activeItem.getBoundingClientRect();
+  const isOutsideView = itemRect.top < listRect.top + 24 || itemRect.bottom > listRect.bottom - 24;
+  if (options.force || isOutsideView) {
+    activeItem.scrollIntoView({
+      block: "center",
+      behavior: options.behavior ?? "smooth",
+    });
   }
 }
 
