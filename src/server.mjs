@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +12,9 @@ const maxUploadBytes = 512 * 1024 * 1024;
 
 loadLocalEnv();
 
-const port = Number(process.env.PORT ?? 3000);
+const cliOptions = parseCliOptions(process.argv.slice(2));
+const requestedPort = cliOptions.port ?? parsePort(process.env.PORT, 0);
+let serverUrl = `http://127.0.0.1:${requestedPort || 0}`;
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -31,12 +34,19 @@ const server = createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+        port: getCurrentPort(),
+        url: serverUrl,
       });
       return;
     }
 
     if (req.method === "POST" && req.url === "/api/transcribe") {
       await handleTranscribe(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/shutdown") {
+      handleShutdown(res);
       return;
     }
 
@@ -55,8 +65,13 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, () => {
-  console.log(`AutoSub is running at http://localhost:${port}`);
+server.listen(requestedPort, "127.0.0.1", () => {
+  const actualPort = getCurrentPort();
+  serverUrl = `http://127.0.0.1:${actualPort}`;
+  console.log(`AutoSub is running at ${serverUrl}`);
+  console.log("Close this window or press Ctrl+C to stop AutoSub.");
+  writeServerInfo(actualPort, serverUrl);
+  if (cliOptions.open) openBrowser(serverUrl);
 });
 
 async function handleTranscribe(req, res) {
@@ -158,7 +173,7 @@ function normalizeSegments(payload) {
 }
 
 async function serveStatic(req, res) {
-  const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+  const url = new URL(req.url ?? "/", serverUrl);
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
   const filePath = resolve(publicDir, normalize(decodeURIComponent(requestedPath)).replace(/^([/\\])+/, ""));
 
@@ -219,6 +234,20 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+function handleShutdown(res) {
+  sendJson(res, 200, {
+    ok: true,
+    message: "AutoSub is shutting down.",
+  });
+
+  setTimeout(() => {
+    server.close(() => {
+      console.log("AutoSub stopped.");
+      process.exit(0);
+    });
+  }, 250);
+}
+
 function sanitizeFileName(value) {
   const cleaned = value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").trim();
   return cleaned || "media.mp4";
@@ -239,4 +268,73 @@ function loadLocalEnv() {
       process.loadEnvFile(envPath);
     }
   }
+}
+
+function parseCliOptions(args) {
+  const options = {
+    open: false,
+    port: undefined,
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--open") {
+      options.open = true;
+      continue;
+    }
+
+    if (arg === "--port") {
+      options.port = parsePort(args[index + 1], 0);
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--port=")) {
+      options.port = parsePort(arg.slice("--port=".length), 0);
+    }
+  }
+
+  return options;
+}
+
+function parsePort(value, fallback) {
+  if (value == null || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535 ? parsed : fallback;
+}
+
+function getCurrentPort() {
+  const address = server.address();
+  return typeof address === "object" && address ? address.port : requestedPort;
+}
+
+function writeServerInfo(actualPort, url) {
+  const infoPath = join(rootDir, ".autosub-server.json");
+  const payload = JSON.stringify(
+    {
+      port: actualPort,
+      url,
+      startedAt: new Date().toISOString(),
+    },
+    null,
+    2,
+  );
+  writeFile(infoPath, `${payload}\n`, "utf8").catch((error) => {
+    console.warn(`Could not write ${infoPath}: ${error.message}`);
+  });
+}
+
+function openBrowser(url) {
+  const command =
+    process.platform === "win32"
+      ? ["cmd", ["/c", "start", "", url]]
+      : process.platform === "darwin"
+        ? ["open", [url]]
+        : ["xdg-open", [url]];
+
+  const child = spawn(command[0], command[1], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
 }

@@ -21,6 +21,17 @@
             </label>
             <button id="transcribeButton" type="button" disabled>產生字幕</button>
             <button id="exportButton" type="button" disabled>匯出 SRT</button>
+            <button id="shutdownButton" class="danger-button" type="button">結束服務</button>
+          </div>
+        </div>
+
+        <div id="progressPanel" class="progress-panel" hidden>
+          <div class="progress-copy">
+            <strong id="progressLabel">準備中</strong>
+            <span id="progressPercent">0%</span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progressBar" class="progress-bar"></div>
           </div>
         </div>
 

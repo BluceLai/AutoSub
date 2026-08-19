@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node src/server.mjs",
-    "start": "node src/server.mjs",
+    "dev": "node src/server.mjs --port=0",
+    "start": "node src/server.mjs --port=0",
     "check": "node --check src/server.mjs"
   },
   "engines": {

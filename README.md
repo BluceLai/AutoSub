@@ -13,27 +13,30 @@
 
    ```text
    OPENAI_API_KEY=sk-your-api-key
-   PORT=3000
+   # PORT 可省略；省略時會自動挑一個可用 port
+   PORT=
    ```
 
-2. 啟動本機網站
+2. 啟動本機網站，可以雙擊 `Start AutoSub.cmd`，或在終端機執行：
 
    ```bash
    npm run dev
    ```
 
-3. 打開 `http://localhost:3000`
+3. 啟動後終端機會顯示實際網址，例如 `http://127.0.0.1:51234`。如果用 `Start AutoSub.cmd`，瀏覽器會自動打開。
 
 ## 目前功能
 
 - 選擇本機影片或音訊檔
 - 在瀏覽器中預覽影片
 - 呼叫 OpenAI Audio Transcriptions API 產生字幕
+- 顯示上傳與轉錄處理進度
 - 播放時同步顯示目前字幕
 - 點字幕時間跳轉播放
 - 編輯字幕文字、開始時間、結束時間
 - 刪除字幕段
 - 匯出 `.srt`
+- 從 UI 按「結束服務」關閉本機 server，關閉前會先確認
 
 ## 設計取捨
 

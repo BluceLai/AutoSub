@@ -2,12 +2,18 @@ const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
 const transcribeButton = document.querySelector("#transcribeButton");
 const exportButton = document.querySelector("#exportButton");
+const shutdownButton = document.querySelector("#shutdownButton");
 const statusText = document.querySelector("#statusText");
 const timeText = document.querySelector("#timeText");
 const captionOverlay = document.querySelector("#captionOverlay");
 const segmentsList = document.querySelector("#segmentsList");
 const emptyState = document.querySelector("#emptyState");
 const segmentCount = document.querySelector("#segmentCount");
+const progressPanel = document.querySelector("#progressPanel");
+const progressLabel = document.querySelector("#progressLabel");
+const progressPercent = document.querySelector("#progressPercent");
+const progressTrack = document.querySelector(".progress-track");
+const progressBar = document.querySelector("#progressBar");
 
 let selectedFile = null;
 let mediaUrl = null;
@@ -28,6 +34,7 @@ mediaInput.addEventListener("change", () => {
 
   transcribeButton.disabled = false;
   exportButton.disabled = true;
+  hideProgress();
   setStatus(`已選擇 ${file.name}，可以開始產生字幕。`);
   renderSegments();
   updateActiveCaption();
@@ -37,26 +44,16 @@ transcribeButton.addEventListener("click", async () => {
   if (!selectedFile) return;
 
   transcribeButton.disabled = true;
+  transcribeButton.textContent = "處理中...";
   exportButton.disabled = true;
-  setStatus("正在上傳到本機 server，準備送 OpenAI 轉錄...");
+  setProgress("準備上傳", 0);
+  setStatus("正在準備檔案...");
 
   try {
-    const response = await fetch("/api/transcribe", {
-      method: "POST",
-      headers: {
-        "Content-Type": selectedFile.type || "application/octet-stream",
-        "X-File-Name": encodeURIComponent(selectedFile.name),
-        "X-Transcription-Model": "whisper-1",
-      },
-      body: selectedFile,
-    });
-
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(formatApiError(payload));
-    }
+    const payload = await transcribeWithProgress(selectedFile);
 
     segments = payload.segments.map((segment) => ({ ...segment }));
+    setProgress("完成", 100);
     setStatus(`完成：產生 ${segments.length} 段字幕。`);
     exportButton.disabled = segments.length === 0;
     renderSegments();
@@ -65,6 +62,7 @@ transcribeButton.addEventListener("click", async () => {
     console.error(error);
     setStatus(error instanceof Error ? error.message : String(error), true);
   } finally {
+    transcribeButton.textContent = "產生字幕";
     transcribeButton.disabled = !selectedFile;
   }
 });
@@ -81,6 +79,23 @@ exportButton.addEventListener("click", () => {
   link.download = `${baseName}.srt`;
   link.click();
   URL.revokeObjectURL(url);
+});
+
+shutdownButton.addEventListener("click", async () => {
+  const shouldShutdown = window.confirm("確定要關閉 AutoSub 本機服務嗎？關閉後目前頁面將無法繼續產生字幕。");
+  if (!shouldShutdown) return;
+
+  shutdownButton.disabled = true;
+  transcribeButton.disabled = true;
+  exportButton.disabled = true;
+  setStatus("正在關閉 AutoSub 本機服務...");
+
+  try {
+    await fetch("/api/shutdown", { method: "POST" });
+    setStatus("AutoSub 已關閉。需要再使用時，請重新執行 Start AutoSub.cmd 或 npm run dev。");
+  } catch {
+    setStatus("服務已關閉。需要再使用時，請重新啟動 AutoSub。");
+  }
 });
 
 mediaPlayer.addEventListener("timeupdate", () => {
@@ -185,6 +200,70 @@ function markActiveSegment() {
 function setStatus(message, isWarning = false) {
   statusText.textContent = message;
   statusText.classList.toggle("warning", isWarning);
+}
+
+function setProgress(label, percent, options = {}) {
+  progressPanel.hidden = false;
+  progressLabel.textContent = label;
+  progressTrack.classList.toggle("is-indeterminate", Boolean(options.indeterminate));
+
+  if (options.indeterminate) {
+    progressPercent.textContent = "處理中";
+    progressTrack.removeAttribute("aria-valuenow");
+    return;
+  }
+
+  const normalized = Math.max(0, Math.min(100, Math.round(percent)));
+  progressPercent.textContent = `${normalized}%`;
+  progressBar.style.width = `${normalized}%`;
+  progressTrack.setAttribute("aria-valuenow", String(normalized));
+}
+
+function hideProgress() {
+  progressPanel.hidden = true;
+  progressTrack.classList.remove("is-indeterminate");
+  progressBar.style.width = "0%";
+  progressTrack.setAttribute("aria-valuenow", "0");
+}
+
+function transcribeWithProgress(file) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/transcribe");
+    request.responseType = "json";
+    request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    request.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    request.setRequestHeader("X-Transcription-Model", "whisper-1");
+
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        const uploadPercent = (event.loaded / event.total) * 65;
+        setProgress("上傳到本機 server", uploadPercent);
+        setStatus(`上傳中：${Math.round((event.loaded / event.total) * 100)}%`);
+      } else {
+        setProgress("上傳到本機 server", 18, { indeterminate: true });
+        setStatus("正在上傳...");
+      }
+    });
+
+    request.upload.addEventListener("load", () => {
+      setProgress("OpenAI 轉錄中", 70, { indeterminate: true });
+      setStatus("上傳完成，OpenAI 正在辨識與產生時間碼...");
+    });
+
+    request.addEventListener("load", () => {
+      const payload = request.response;
+      if (request.status >= 200 && request.status < 300) {
+        resolve(payload);
+        return;
+      }
+      reject(new Error(formatApiError(payload)));
+    });
+
+    request.addEventListener("error", () => reject(new Error("連線失敗，請確認本機服務仍在執行。")));
+    request.addEventListener("abort", () => reject(new Error("轉錄已取消。")));
+    request.send(file);
+  });
 }
 
 function toSrt(items) {
