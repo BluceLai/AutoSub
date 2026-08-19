@@ -704,10 +704,6 @@ function jumpToSearchMatch(index) {
   if (!match) return;
 
   jumpToSegment(match.segmentId);
-  const item = getSegmentItem(match.segmentId);
-  const textarea = item?.querySelector("textarea");
-  textarea?.focus();
-  textarea?.setSelectionRange(match.start, match.end);
 }
 
 function replaceCurrentSearchMatch() {
