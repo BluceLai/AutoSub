@@ -8,7 +8,7 @@
     "start": "node src/server.mjs --port=0",
     "sample:clip": "node scripts/create-test-clip.mjs",
     "test": "node --experimental-test-isolation=none --test",
-    "check": "node --check src/server.mjs && node --check scripts/create-test-clip.mjs && node --check public/subtitle-text.js && node --check public/subtitle-quality.js && node --check public/subtitle-timing.js && node --check public/subtitle-navigation.js && node --check public/subtitle-insert.js && node --check public/subtitle-file.js && node --check public/subtitle-search.js && node --check public/quality-navigation.js && node --check public/app.js && node --experimental-test-isolation=none --test"
+    "check": "node --check src/server.mjs && node --check src/media-upload.mjs && node --check scripts/create-test-clip.mjs && node --check public/subtitle-text.js && node --check public/subtitle-quality.js && node --check public/subtitle-timing.js && node --check public/subtitle-navigation.js && node --check public/subtitle-insert.js && node --check public/subtitle-file.js && node --check public/subtitle-search.js && node --check public/quality-navigation.js && node --check public/app.js && node --experimental-test-isolation=none --test"
   },
   "engines": {
     "node": ">=22"

@@ -6,6 +6,7 @@
 
 - Node.js 22 或更新版本
 - OpenAI API key
+- ffmpeg，影片轉錄時會先在本機抽出音訊
 
 ## 啟動
 
@@ -31,7 +32,8 @@
 - 在瀏覽器中預覽影片
 - 匯入 `.srt` / `.vtt` 字幕檔，直接進入預覽與編輯
 - 載入測試字幕，不消耗 OpenAI 用量
-- 呼叫 OpenAI Audio Transcriptions API 產生字幕
+- 影片檔會先用本機 ffmpeg 抽成音訊，再呼叫 OpenAI Audio Transcriptions API 產生字幕
+- 音訊檔會直接呼叫 OpenAI Audio Transcriptions API 產生字幕
 - 顯示上傳與轉錄處理進度
 - 播放時同步顯示目前字幕
 - 可開關跟隨播放，讓右側字幕列表自動對齊目前播放段落
@@ -79,7 +81,7 @@ npm run sample:clip
 
 也可以雙擊 `Create 20s Test Clip.cmd`。產出的短片會放在 `samples/output/`，不會被 git 追蹤。
 
-這台電腦目前需要先安裝 ffmpeg：
+影片抽音訊與測試短片工具都需要先安裝 ffmpeg：
 
 ```powershell
 winget install Gyan.FFmpeg
@@ -101,6 +103,8 @@ npm run check
 
 ## 設計取捨
 
-這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；轉錄時會把選取的檔案送到 OpenAI Audio Transcriptions API。
+這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；影片轉錄時會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API。音訊檔則直接送到 OpenAI。
 
 時間碼第一版使用 `whisper-1` 的 `verbose_json` segment timestamps，因為目前 `gpt-4o-transcribe` 系列只支援 JSON 文字輸出，不適合作為需要 SRT 時間軸的第一版核心。
+
+完整流程與參考影片式互動取捨請看 `docs/transcription-workflow.md`。

@@ -1,9 +1,16 @@
 import { createServer } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { stat, writeFile } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  createAudioExtractionArgs,
+  createExtractedAudioFileName,
+  extractedAudioContentType,
+  shouldExtractAudio,
+} from "./media-upload.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
@@ -34,6 +41,7 @@ const server = createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+        hasFfmpeg: Boolean(await findCommand("ffmpeg")),
         port: getCurrentPort(),
         url: serverUrl,
       });
@@ -104,8 +112,19 @@ async function handleTranscribe(req, res) {
     return;
   }
 
+  let upload;
+  try {
+    upload = await prepareTranscriptionUpload({ buffer, contentType, fileName });
+  } catch (error) {
+    sendJson(res, 500, {
+      error: "Audio extraction failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
   const body = new FormData();
-  body.append("file", new Blob([buffer], { type: contentType }), fileName);
+  body.append("file", new Blob([upload.buffer], { type: upload.contentType }), upload.fileName);
   body.append("model", model);
   body.append("language", "zh");
   body.append("prompt", prompt);
@@ -141,7 +160,97 @@ async function handleTranscribe(req, res) {
     language: payload.language ?? "zh",
     duration: payload.duration ?? null,
     model,
+    upload: getUploadMetadata(upload),
     segments,
+  });
+}
+
+function getUploadMetadata(upload) {
+  return {
+    extractedAudio: upload.extractedAudio,
+    fileName: upload.fileName,
+    contentType: upload.contentType,
+    originalBytes: upload.originalBytes,
+    uploadedBytes: upload.uploadedBytes,
+  };
+}
+
+async function prepareTranscriptionUpload({ buffer, contentType, fileName }) {
+  if (!shouldExtractAudio({ contentType, fileName })) {
+    return {
+      extractedAudio: false,
+      fileName,
+      contentType,
+      originalBytes: buffer.byteLength,
+      uploadedBytes: buffer.byteLength,
+      buffer,
+    };
+  }
+
+  const ffmpeg = await findCommand("ffmpeg");
+  if (!ffmpeg) {
+    throw new Error("找不到 ffmpeg，請先安裝 ffmpeg 或改用音訊檔上傳。");
+  }
+
+  const tempDir = await mkdtemp(join(tmpdir(), "autosub-"));
+  const inputPath = join(tempDir, fileName);
+  const outputFileName = createExtractedAudioFileName(fileName);
+  const outputPath = join(tempDir, outputFileName);
+
+  try {
+    await writeFile(inputPath, buffer);
+    await run(ffmpeg, createAudioExtractionArgs(inputPath, outputPath));
+    const audioBuffer = await readFile(outputPath);
+    return {
+      extractedAudio: true,
+      fileName: outputFileName,
+      contentType: extractedAudioContentType,
+      originalBytes: buffer.byteLength,
+      uploadedBytes: audioBuffer.byteLength,
+      buffer: audioBuffer,
+    };
+  } finally {
+    await rm(tempDir, { force: true, recursive: true });
+  }
+}
+
+async function findCommand(command) {
+  const extensions =
+    process.platform === "win32" ? String(process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+
+  for (const directory of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate =
+        process.platform === "win32" && extension && !command.toLowerCase().endsWith(extension.toLowerCase())
+          ? join(directory, `${command}${extension.toLowerCase()}`)
+          : join(directory, command);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+
+  return null;
+}
+
+function run(command, args) {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    let stderr = "";
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", rejectRun);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolveRun();
+        return;
+      }
+
+      rejectRun(new Error(stderr.trim() || `${command} exited with code ${code}`));
+    });
   });
 }
 

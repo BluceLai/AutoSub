@@ -56,12 +56,14 @@ const qualityList = document.querySelector("#qualityList");
 const previousIssueButton = document.querySelector("#previousIssueButton");
 const nextIssueButton = document.querySelector("#nextIssueButton");
 const maxUndoSteps = 10;
+const videoExtensions = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv"]);
 
 let selectedFile = null;
 let mediaUrl = null;
 let segments = [];
 let activeSegmentId = null;
 let hasApiKey = false;
+let hasFfmpeg = false;
 let currentProjectKey = null;
 let saveTimer = null;
 let splitMode = false;
@@ -159,7 +161,7 @@ mediaInput.addEventListener("change", () => {
   addSegmentButton.disabled = false;
   exportProjectButton.disabled = segments.length === 0;
   demoButton.disabled = false;
-  transcribeButton.disabled = !hasApiKey;
+  updateTranscribeAvailability();
   exportButton.disabled = segments.length === 0;
   exportFormat.disabled = segments.length === 0;
   enableOutputControls();
@@ -169,7 +171,7 @@ mediaInput.addEventListener("change", () => {
     setStatus(`已接回 ${file.name} 的本機字幕專案。`);
     setProjectStatus(`上次儲存：${formatSavedAt(savedProject.savedAt)}`);
   } else {
-    setStatus(hasApiKey ? `已選擇 ${file.name}，可以開始產生字幕。` : `已選擇 ${file.name}。尚未設定 API key，可先載入測試字幕。`);
+    setStatus(getSelectedFileStatusMessage(file));
     setProjectStatus("尚未建立字幕專案");
   }
   renderSegments();
@@ -253,13 +255,13 @@ transcribeButton.addEventListener("click", async () => {
       segments = payload.segments.map((segment) => ({ ...segment }));
     });
     setProgress("完成", 100);
-    setStatus(`完成：產生 ${segments.length} 段字幕。`);
+    setStatus(`完成：產生 ${segments.length} 段字幕。${formatUploadSummary(payload.upload)}`);
   } catch (error) {
     console.error(error);
     setStatus(error instanceof Error ? error.message : String(error), true);
   } finally {
     transcribeButton.textContent = "產生字幕";
-    transcribeButton.disabled = !selectedFile || !hasApiKey;
+    updateTranscribeAvailability();
   }
 });
 
@@ -1238,11 +1240,15 @@ async function checkHealth() {
     const response = await fetch("/api/health");
     const health = await response.json();
     hasApiKey = Boolean(health.hasApiKey);
+    hasFfmpeg = Boolean(health.hasFfmpeg);
     keyStatus.className = `key-status ${hasApiKey ? "is-ready" : "is-missing"}`;
     keyStatus.textContent = hasApiKey
-      ? "OpenAI API key 已設定，可以正式產生字幕"
+      ? hasFfmpeg
+        ? "OpenAI API key 已設定，可以正式產生字幕"
+        : "OpenAI API key 已設定；影片轉錄需要 ffmpeg"
       : "尚未設定 OpenAI API key；可先用測試字幕模式";
-    transcribeButton.disabled = !selectedFile || !hasApiKey;
+    updateTranscribeAvailability();
+    if (selectedFile) setStatus(getSelectedFileStatusMessage(selectedFile));
   } catch {
     keyStatus.className = "key-status is-missing";
     keyStatus.textContent = "無法連線到本機服務";
@@ -1252,6 +1258,35 @@ async function checkHealth() {
 
 function getProjectKey(file) {
   return `autosub:project:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function updateTranscribeAvailability() {
+  transcribeButton.disabled = !canTranscribeSelectedFile();
+}
+
+function canTranscribeSelectedFile() {
+  if (!selectedFile || !hasApiKey) return false;
+  return !needsAudioExtraction(selectedFile) || hasFfmpeg;
+}
+
+function getSelectedFileStatusMessage(file) {
+  if (!hasApiKey) return `已選擇 ${file.name}。尚未設定 API key，可先載入測試字幕。`;
+  if (needsAudioExtraction(file) && !hasFfmpeg) {
+    return `已選擇影片 ${file.name}。這台電腦尚未安裝 ffmpeg，暫時只能轉錄音訊檔。`;
+  }
+  if (needsAudioExtraction(file)) return `已選擇 ${file.name}，產生字幕時會先在本機抽出音訊。`;
+  return `已選擇 ${file.name}，可以開始產生字幕。`;
+}
+
+function needsAudioExtraction(file) {
+  const contentType = String(file?.type || "").toLowerCase().split(";")[0].trim();
+  if (contentType.startsWith("video/")) return true;
+  if (contentType.startsWith("audio/")) return false;
+
+  const extension = String(file?.name || "")
+    .toLowerCase()
+    .match(/\.[^.]+$/)?.[0];
+  return videoExtensions.has(extension);
 }
 
 function loadSavedProject(key) {
@@ -1383,8 +1418,8 @@ function transcribeWithProgress(file) {
     });
 
     request.upload.addEventListener("load", () => {
-      setProgress("OpenAI 轉錄中", 70, { indeterminate: true });
-      setStatus("上傳完成，OpenAI 正在辨識與產生時間碼...");
+      setProgress("本機準備音訊 / OpenAI 轉錄中", 70, { indeterminate: true });
+      setStatus("上傳到本機完成，正在抽取音訊並送 OpenAI 產生時間碼...");
     });
 
     request.addEventListener("load", () => {
@@ -1400,6 +1435,26 @@ function transcribeWithProgress(file) {
     request.addEventListener("abort", () => reject(new Error("轉錄已取消。")));
     request.send(file);
   });
+}
+
+function formatUploadSummary(upload) {
+  if (!upload) return "";
+
+  const uploadedSize = formatFileSize(upload.uploadedBytes);
+  if (upload.extractedAudio) {
+    return ` 已先抽出音訊，實際送出 ${uploadedSize}。`;
+  }
+
+  return ` 實際送出 ${uploadedSize}。`;
+}
+
+function formatFileSize(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return "未知大小";
+
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function createDemoSegments(duration) {
