@@ -12,7 +12,9 @@ import { getSubtitleInsertSlot } from "./subtitle-insert.js";
 import { parseSubtitleFile } from "./subtitle-file.js";
 import { findSubtitleMatches, replaceAllSubtitleMatches, replaceSubtitleMatch } from "./subtitle-search.js";
 import { getQualityIssueNavigationIndex } from "./quality-navigation.js";
-import { createRetranscriptionConfirmationMessage, shouldConfirmRetranscription } from "./transcription-guard.js";
+import {
+  createTranscriptionConfirmationMessage,
+} from "./transcription-guard.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -243,12 +245,17 @@ for (const button of shiftAllButtons) {
 transcribeButton.addEventListener("click", async () => {
   if (!selectedFile) return;
 
-  if (shouldConfirmRetranscription(segments)) {
-    const shouldReplace = window.confirm(createRetranscriptionConfirmationMessage(selectedFile.name, segments.length));
-    if (!shouldReplace) {
-      setStatus("已取消重新產生字幕，保留目前字幕。");
-      return;
-    }
+  const shouldTranscribe = window.confirm(
+    createTranscriptionConfirmationMessage({
+      fileName: selectedFile.name,
+      extractsAudio: needsAudioExtraction(selectedFile),
+      segmentCount: segments.length,
+      durationSeconds: Number.isFinite(mediaPlayer.duration) ? mediaPlayer.duration : null,
+    }),
+  );
+  if (!shouldTranscribe) {
+    setStatus("已取消產生字幕，沒有送出檔案。");
+    return;
   }
 
   transcribeButton.disabled = true;

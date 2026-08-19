@@ -64,6 +64,14 @@
 
 也可以按「匯出專案」下載 `.autosub.json`，之後選回影片再按「匯入專案」接回。專案檔只包含字幕段落與影片檔資訊，不包含影片本體。
 
+## 隱私與 API key
+
+- `OPENAI_API_KEY` 只由本機 Node server 從 `.env.local` 讀取，不會送到瀏覽器前端。
+- `.env.local` 已列在 `.gitignore`，不要 commit 或分享這個檔案。
+- 未按「產生字幕」前，影片/音訊只在本機瀏覽器與本機 Node server 間流動。
+- 按「產生字幕」後，影片檔會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API；音訊檔則會直接送到 OpenAI。
+- 內部測試請避免使用不可外傳的隱私或機密素材；若只要測 UI，可用「載入測試字幕」，不會消耗 OpenAI 用量，也不會送檔案到 OpenAI。
+
 ## 測試樣本
 
 這個 repo 內有一個測試樣本準備工具，可以從指定影片截出短片，避免早期測試浪費完整影片的轉錄用量。
@@ -81,6 +89,14 @@ npm run sample:clip
 ```
 
 也可以雙擊 `Create 20s Test Clip.cmd`。產出的短片會放在 `samples/output/`，不會被 git 追蹤。
+
+產生 10 秒音訊測試樣本，用來做最小 OpenAI 線上轉錄 smoke test：
+
+```bash
+npm run sample:audio
+```
+
+也可以雙擊 `Create 10s Audio Test Sample.cmd`。正式測試 OpenAI 轉錄時，建議先用這個 10 秒 `.mp3`，確認 API key、上傳、轉錄、字幕顯示都正常後，再處理較長影片。
 
 影片抽音訊與測試短片工具都需要先安裝 ffmpeg：
 

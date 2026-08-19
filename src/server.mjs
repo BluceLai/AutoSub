@@ -3,8 +3,9 @@ import { createReadStream, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findCommand } from "./command-path.mjs";
 import {
   createAudioExtractionArgs,
   createExtractedAudioFileName,
@@ -212,23 +213,6 @@ async function prepareTranscriptionUpload({ buffer, contentType, fileName }) {
   } finally {
     await rm(tempDir, { force: true, recursive: true });
   }
-}
-
-async function findCommand(command) {
-  const extensions =
-    process.platform === "win32" ? String(process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";") : [""];
-
-  for (const directory of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
-    for (const extension of extensions) {
-      const candidate =
-        process.platform === "win32" && extension && !command.toLowerCase().endsWith(extension.toLowerCase())
-          ? join(directory, `${command}${extension.toLowerCase()}`)
-          : join(directory, command);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-
-  return null;
 }
 
 function run(command, args) {
