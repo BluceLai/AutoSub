@@ -125,6 +125,8 @@ AUTOSUB_WHISPER_CPP_MODEL=C:\path\to\ggml-small.bin
 
 完整比較與建議請看 `docs/offline-transcription-poc.md`。
 
+Windows 安裝步驟請看 `docs/whisper-cpp-windows-setup.md`。
+
 ## 驗證
 
 執行純函式測試：

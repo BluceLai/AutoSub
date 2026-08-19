@@ -118,6 +118,8 @@ for segment in segments:
 6. 記錄本機測試表：模型、檔案大小、執行秒數、字幕段數、繁體/簡體情況、專有詞錯誤。
 7. 第二輪才評估 faster-whisper Python worker，重點是速度與品質是否明顯值得承擔 Python 發佈成本。
 
+Windows 安裝步驟另見：`docs/whisper-cpp-windows-setup.md`。
+
 ## PoC 驗收建議
 
 | 項目 | whisper.cpp 第一版門檻 |
