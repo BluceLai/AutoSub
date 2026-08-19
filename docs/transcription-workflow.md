@@ -8,10 +8,11 @@
 2. AutoSub 在瀏覽器中載入媒體，建立可預覽的工作區。
 3. 若是影片檔，本機 server 先用 ffmpeg 抽出低流量音訊。
 4. 若是音訊檔，直接進入轉錄流程。
-5. AutoSub 將音訊送到 OpenAI Audio Transcriptions API 產生文字與時間碼。
-6. 轉錄結果轉成 AutoSub 字幕段落，進入播放器預覽與右側編輯器。
-7. 使用者可逐段修正文字、時間、拆分、合併、新增字幕段、搜尋取代與品質檢查。
-8. 完成後匯出 `.srt`、`.vtt` 或 `.txt`，也可匯出 `.autosub.json` 專案檔。
+5. 本機 server 建立轉錄工作，並用 server-sent events 回報抽音訊、送 OpenAI、建立字幕與完成階段。
+6. AutoSub 將音訊送到 OpenAI Audio Transcriptions API 產生文字與時間碼。
+7. 轉錄結果轉成 AutoSub 字幕段落，進入播放器預覽與右側編輯器。
+8. 使用者可逐段修正文字、時間、拆分、合併、新增字幕段、搜尋取代與品質檢查。
+9. 完成後匯出 `.srt`、`.vtt` 或 `.txt`，也可匯出 `.autosub.json` 專案檔。
 
 ## 最小線上轉錄測試
 

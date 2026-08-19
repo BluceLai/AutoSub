@@ -35,7 +35,7 @@
 - 影片檔會先用本機 ffmpeg 抽成音訊，再呼叫 OpenAI Audio Transcriptions API 產生字幕
 - 音訊檔會直接呼叫 OpenAI Audio Transcriptions API 產生字幕
 - 目前已有字幕段落時，重新產生字幕前會先要求確認，避免重複消耗 OpenAI 用量
-- 顯示上傳與轉錄處理進度
+- 顯示上傳與轉錄處理進度，包含本機抽音訊、送 OpenAI、建立字幕與完成階段
 - 播放時同步顯示目前字幕
 - 可開關跟隨播放，讓右側字幕列表自動對齊目前播放段落
 - 顯示字幕品質檢查，提示時間重疊、過短、過長、文字空白與閱讀速度偏快
@@ -121,6 +121,8 @@ npm run check
 ## 設計取捨
 
 這版先做本機工具，不做登入、雲端保存、多人協作或付費。影片檔只在本機瀏覽器與本機 Node server 間流動；影片轉錄時會先在本機抽出音訊，再把音訊送到 OpenAI Audio Transcriptions API。音訊檔則直接送到 OpenAI。
+
+正式產生字幕時，瀏覽器會先把檔案上傳到本機 server，server 建立一個轉錄工作並用 server-sent events 回報階段進度。
 
 時間碼第一版使用 `whisper-1` 的 `verbose_json` segment timestamps，因為目前 `gpt-4o-transcribe` 系列只支援 JSON 文字輸出，不適合作為需要 SRT 時間軸的第一版核心。
 

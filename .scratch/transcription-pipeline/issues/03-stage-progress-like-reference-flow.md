@@ -4,9 +4,9 @@
 
 **Blocked by:** 02 — 影片先抽音訊再轉錄.
 
-**Status:** partially implemented
+**Status:** done
 
 - [x] UI 在本機上傳完成後顯示本機準備音訊 / OpenAI 轉錄中。
 - [x] 完成後顯示是否有抽音訊，以及實際送出的檔案大小。
 - [x] 錯誤時保留目前影片與既有字幕，不清空使用者工作。
-- [ ] UI 尚未把抽音訊與 OpenAI 轉錄拆成 server-sent 的獨立即時階段。
+- [x] UI 已透過 server-sent events 把抽音訊、送 OpenAI、建立字幕與完成拆成獨立即時階段。

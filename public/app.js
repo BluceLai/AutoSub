@@ -12,9 +12,8 @@ import { getSubtitleInsertSlot } from "./subtitle-insert.js";
 import { parseSubtitleFile } from "./subtitle-file.js";
 import { findSubtitleMatches, replaceAllSubtitleMatches, replaceSubtitleMatch } from "./subtitle-search.js";
 import { getQualityIssueNavigationIndex } from "./quality-navigation.js";
-import {
-  createTranscriptionConfirmationMessage,
-} from "./transcription-guard.js";
+import { getTranscriptionProgressView } from "./transcription-progress.js";
+import { createTranscriptionConfirmationMessage } from "./transcription-guard.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -1416,7 +1415,7 @@ function hideProgress() {
 function transcribeWithProgress(file) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("POST", "/api/transcribe");
+    request.open("POST", "/api/transcribe-jobs");
     request.responseType = "json";
     request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     request.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
@@ -1434,14 +1433,14 @@ function transcribeWithProgress(file) {
     });
 
     request.upload.addEventListener("load", () => {
-      setProgress("本機準備音訊 / OpenAI 轉錄中", 70, { indeterminate: true });
-      setStatus("上傳到本機完成，正在抽取音訊並送 OpenAI 產生時間碼...");
+      setProgress("建立轉錄工作", 40, { indeterminate: true });
+      setStatus("上傳到本機完成，正在建立轉錄工作...");
     });
 
     request.addEventListener("load", () => {
       const payload = request.response;
       if (request.status >= 200 && request.status < 300) {
-        resolve(payload);
+        subscribeToTranscriptionJob(payload, resolve, reject);
         return;
       }
       reject(new Error(formatApiError(payload)));
@@ -1451,6 +1450,48 @@ function transcribeWithProgress(file) {
     request.addEventListener("abort", () => reject(new Error("轉錄已取消。")));
     request.send(file);
   });
+}
+
+function subscribeToTranscriptionJob(payload, resolve, reject) {
+  if (!payload?.eventsUrl) {
+    reject(new Error("轉錄工作建立失敗：沒有收到進度事件網址。"));
+    return;
+  }
+
+  const source = new EventSource(payload.eventsUrl);
+  let settled = false;
+
+  source.onmessage = (event) => {
+    let update;
+    try {
+      update = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    applyTranscriptionProgressUpdate(update);
+
+    if (update.stage === "complete") {
+      settled = true;
+      source.close();
+      resolve(update.result);
+    } else if (update.stage === "failed") {
+      settled = true;
+      source.close();
+      reject(new Error(formatApiError(update.error ?? { error: update.message })));
+    }
+  };
+
+  source.onerror = () => {
+    source.close();
+    if (!settled) reject(new Error("無法接收轉錄進度，請確認本機服務仍在執行。"));
+  };
+}
+
+function applyTranscriptionProgressUpdate(update) {
+  const view = getTranscriptionProgressView(update);
+  setProgress(view.label, view.percent, { indeterminate: view.indeterminate });
+  setStatus(view.status);
 }
 
 function formatUploadSummary(upload) {

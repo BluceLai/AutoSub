@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, normalize, resolve } from "node:path";
@@ -12,11 +13,19 @@ import {
   extractedAudioContentType,
   shouldExtractAudio,
 } from "./media-upload.mjs";
+import {
+  createTranscriptionJob,
+  isTranscriptionJobTerminal,
+  recordTranscriptionJobEvent,
+  serializeServerSentEvent,
+} from "./transcription-job.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const publicDir = join(rootDir, "public");
 const maxUploadBytes = 512 * 1024 * 1024;
+const transcriptionJobs = new Map();
+const jobRetentionMs = 15 * 60 * 1000;
 
 loadLocalEnv();
 
@@ -38,6 +47,8 @@ const mimeTypes = new Map([
 
 const server = createServer(async (req, res) => {
   try {
+    const requestUrl = new URL(req.url ?? "/", serverUrl);
+
     if (req.method === "GET" && req.url === "/api/health") {
       sendJson(res, 200, {
         ok: true,
@@ -46,6 +57,17 @@ const server = createServer(async (req, res) => {
         port: getCurrentPort(),
         url: serverUrl,
       });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/transcribe-jobs") {
+      await handleCreateTranscriptionJob(req, res);
+      return;
+    }
+
+    const jobEventsMatch = requestUrl.pathname.match(/^\/api\/transcribe-jobs\/([^/]+)\/events$/);
+    if (req.method === "GET" && jobEventsMatch) {
+      handleTranscriptionJobEvents(decodeURIComponent(jobEventsMatch[1]), req, res);
       return;
     }
 
@@ -113,17 +135,177 @@ async function handleTranscribe(req, res) {
     return;
   }
 
-  let upload;
   try {
-    upload = await prepareTranscriptionUpload({ buffer, contentType, fileName });
+    sendJson(res, 200, await createTranscriptionResult({ apiKey, buffer, contentType, fileName, model, prompt }));
   } catch (error) {
-    sendJson(res, 500, {
-      error: "Audio extraction failed",
-      detail: error instanceof Error ? error.message : String(error),
+    sendJson(res, error?.statusCode ?? 500, createErrorPayload(error));
+  }
+}
+
+async function handleCreateTranscriptionJob(req, res) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    sendJson(res, 400, {
+      error: "Missing OPENAI_API_KEY",
+      detail: "Create .env.local with OPENAI_API_KEY=sk-...",
     });
     return;
   }
 
+  const contentLength = Number(req.headers["content-length"] ?? 0);
+  if (contentLength > maxUploadBytes) {
+    sendJson(res, 413, {
+      error: "File too large",
+      detail: "The current local MVP accepts files up to 512 MB.",
+    });
+    return;
+  }
+
+  const contentType = req.headers["content-type"] || "application/octet-stream";
+  const fileName = sanitizeFileName(decodeURIComponent(String(req.headers["x-file-name"] || "media.mp4")));
+  const model = String(req.headers["x-transcription-model"] || "whisper-1");
+  const prompt = String(req.headers["x-transcription-prompt"] || "請以台灣繁體中文轉錄，保留自然標點，專有名詞盡量使用原文。");
+  const buffer = await readRequestBody(req, maxUploadBytes);
+
+  if (buffer.byteLength === 0) {
+    sendJson(res, 400, { error: "Empty upload" });
+    return;
+  }
+
+  const job = createTranscriptionJob(randomUUID());
+  job.listeners = new Set();
+  transcriptionJobs.set(job.id, job);
+  publishTranscriptionJobEvent(job, {
+    stage: "queued",
+    message: "轉錄工作已建立，等待本機 server 處理...",
+    percent: 5,
+  });
+
+  sendJson(res, 202, {
+    jobId: job.id,
+    eventsUrl: `/api/transcribe-jobs/${encodeURIComponent(job.id)}/events`,
+  });
+
+  processTranscriptionJob(job, { apiKey, buffer, contentType, fileName, model, prompt });
+}
+
+function handleTranscriptionJobEvents(jobId, req, res) {
+  const job = transcriptionJobs.get(jobId);
+  if (!job) {
+    sendJson(res, 404, { error: "Transcription job not found" });
+    return;
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  res.write(": connected\n\n");
+
+  const writeEvent = (event) => {
+    res.write(serializeServerSentEvent(event));
+  };
+
+  for (const event of job.events) writeEvent(event);
+
+  if (isTranscriptionJobTerminal(job)) {
+    res.end();
+    return;
+  }
+
+  job.listeners.add(writeEvent);
+  const keepAlive = setInterval(() => {
+    res.write(": keep-alive\n\n");
+  }, 15000);
+  keepAlive.unref?.();
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    job.listeners.delete(writeEvent);
+  });
+}
+
+async function processTranscriptionJob(job, options) {
+  try {
+    const result = await createTranscriptionResult({
+      ...options,
+      publish: (event) => publishTranscriptionJobEvent(job, event),
+    });
+    publishTranscriptionJobEvent(job, {
+      stage: "complete",
+      message: `完成：產生 ${result.segments.length} 段字幕。`,
+      percent: 100,
+      result,
+    });
+  } catch (error) {
+    publishTranscriptionJobEvent(job, {
+      stage: "failed",
+      message: error instanceof Error ? error.message : String(error),
+      percent: job.percent || 100,
+      error: createErrorPayload(error),
+    });
+  } finally {
+    scheduleTranscriptionJobCleanup(job.id);
+  }
+}
+
+function publishTranscriptionJobEvent(job, event) {
+  const recordedEvent = recordTranscriptionJobEvent(job, event);
+  for (const listener of job.listeners ?? []) listener(recordedEvent);
+  return recordedEvent;
+}
+
+function scheduleTranscriptionJobCleanup(jobId) {
+  const timer = setTimeout(() => {
+    transcriptionJobs.delete(jobId);
+  }, jobRetentionMs);
+  timer.unref?.();
+}
+
+async function createTranscriptionResult({ apiKey, buffer, contentType, fileName, model, prompt, publish = () => {} }) {
+  publish({
+    stage: "preparing",
+    message: "正在準備檔案...",
+    percent: 12,
+  });
+
+  const extractsAudio = shouldExtractAudio({ contentType, fileName });
+  publish({
+    stage: extractsAudio ? "extracting-audio" : "preparing-audio",
+    message: extractsAudio ? "正在用 ffmpeg 抽出低流量音訊..." : "音訊檔已準備完成...",
+    percent: extractsAudio ? 30 : 35,
+  });
+
+  const upload = await prepareTranscriptionUpload({ buffer, contentType, fileName });
+  const uploadMetadata = getUploadMetadata(upload);
+  publish({
+    stage: "uploading-openai",
+    message: "正在送 OpenAI 辨識並產生時間碼...",
+    percent: 60,
+    upload: uploadMetadata,
+  });
+
+  const payload = await callOpenAiTranscription({ apiKey, upload, model, prompt });
+  publish({
+    stage: "building-subtitles",
+    message: "正在把轉錄結果轉成可編輯字幕...",
+    percent: 90,
+    upload: uploadMetadata,
+  });
+
+  const segments = normalizeSegments(payload);
+  return {
+    text: payload.text ?? segments.map((segment) => segment.text).join(" "),
+    language: payload.language ?? "zh",
+    duration: payload.duration ?? null,
+    model,
+    upload: uploadMetadata,
+    segments,
+  };
+}
+
+async function callOpenAiTranscription({ apiKey, upload, model, prompt }) {
   const body = new FormData();
   body.append("file", new Blob([upload.buffer], { type: upload.contentType }), upload.fileName);
   body.append("model", model);
@@ -147,23 +329,20 @@ async function handleTranscribe(req, res) {
 
   const responseText = await response.text();
   if (!response.ok) {
-    sendJson(res, response.status, {
-      error: "OpenAI transcription failed",
-      detail: safeJsonOrText(responseText),
-    });
-    return;
+    const error = new Error("OpenAI transcription failed");
+    error.statusCode = response.status;
+    error.detail = safeJsonOrText(responseText);
+    throw error;
   }
 
-  const payload = JSON.parse(responseText);
-  const segments = normalizeSegments(payload);
-  sendJson(res, 200, {
-    text: payload.text ?? segments.map((segment) => segment.text).join(" "),
-    language: payload.language ?? "zh",
-    duration: payload.duration ?? null,
-    model,
-    upload: getUploadMetadata(upload),
-    segments,
-  });
+  return JSON.parse(responseText);
+}
+
+function createErrorPayload(error) {
+  return {
+    error: error?.message ?? "Transcription failed",
+    detail: error?.detail ?? (error instanceof Error ? error.message : String(error)),
+  };
 }
 
 function getUploadMetadata(upload) {
