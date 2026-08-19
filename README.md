@@ -34,6 +34,7 @@
 - 載入測試字幕，不消耗 OpenAI 用量
 - 影片檔會先用本機 ffmpeg 抽成音訊，再呼叫 OpenAI Audio Transcriptions API 產生字幕
 - 音訊檔會直接呼叫 OpenAI Audio Transcriptions API 產生字幕
+- 目前已有字幕段落時，重新產生字幕前會先要求確認，避免重複消耗 OpenAI 用量
 - 顯示上傳與轉錄處理進度
 - 播放時同步顯示目前字幕
 - 可開關跟隨播放，讓右側字幕列表自動對齊目前播放段落
