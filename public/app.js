@@ -421,7 +421,7 @@ function setSplitMode(enabled) {
     guide.setAttribute("aria-hidden", enabled ? "false" : "true");
   }
   if (enabled && segments.length > 0) {
-    setStatus("Ctrl 拆分模式：文字框已暫時隱藏，點字下方小點即可拆分。");
+    setStatus("Ctrl 拆分模式：文字框已暫時隱藏，移到文字上會醒目提示，點一下即可從該字後拆分。");
   }
 }
 
@@ -431,25 +431,24 @@ function createSplitGuide(segment) {
   guide.setAttribute("aria-hidden", splitMode ? "false" : "true");
 
   const characters = Array.from(segment.text.trim());
-  const splitPoints = characters.slice(0, -1);
 
-  for (const [index, character] of splitPoints.entries()) {
-    const slot = document.createElement("span");
-    slot.className = "split-slot";
+  for (const [index, character] of characters.entries()) {
+    if (index === characters.length - 1) {
+      const char = document.createElement("span");
+      char.className = "split-token is-terminal";
+      char.textContent = character;
+      guide.append(char);
+      continue;
+    }
 
-    const char = document.createElement("span");
-    char.className = "split-char";
-    char.textContent = character;
-
-    const point = document.createElement("button");
-    point.type = "button";
-    point.className = "split-point";
-    point.title = `從「${character}」後拆分`;
-    point.setAttribute("aria-label", `從第 ${index + 1} 個字後拆分`);
-    point.addEventListener("click", () => splitSegmentAtTextIndex(segment.id, index + 1));
-
-    slot.append(char, point);
-    guide.append(slot);
+    const token = document.createElement("button");
+    token.type = "button";
+    token.className = "split-token";
+    token.textContent = character;
+    token.title = `從「${character}」後拆分`;
+    token.setAttribute("aria-label", `從第 ${index + 1} 個字後拆分`);
+    token.addEventListener("click", () => splitSegmentAtTextIndex(segment.id, index + 1));
+    guide.append(token);
   }
 
   return guide;
