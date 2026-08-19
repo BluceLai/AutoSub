@@ -6,6 +6,7 @@ const exportButton = document.querySelector("#exportButton");
 const exportFormat = document.querySelector("#exportFormat");
 const shutdownButton = document.querySelector("#shutdownButton");
 const statusText = document.querySelector("#statusText");
+const keyStatus = document.querySelector("#keyStatus");
 const timeText = document.querySelector("#timeText");
 const captionOverlay = document.querySelector("#captionOverlay");
 const segmentsList = document.querySelector("#segmentsList");
@@ -21,6 +22,9 @@ let selectedFile = null;
 let mediaUrl = null;
 let segments = [];
 let activeSegmentId = null;
+let hasApiKey = false;
+
+checkHealth();
 
 mediaInput.addEventListener("change", () => {
   const file = mediaInput.files?.[0];
@@ -35,11 +39,11 @@ mediaInput.addEventListener("change", () => {
   mediaPlayer.src = mediaUrl;
 
   demoButton.disabled = false;
-  transcribeButton.disabled = false;
+  transcribeButton.disabled = !hasApiKey;
   exportButton.disabled = true;
   exportFormat.disabled = true;
   hideProgress();
-  setStatus(`已選擇 ${file.name}，可以開始產生字幕。`);
+  setStatus(hasApiKey ? `已選擇 ${file.name}，可以開始產生字幕。` : `已選擇 ${file.name}。尚未設定 API key，可先載入測試字幕。`);
   renderSegments();
   updateActiveCaption();
 });
@@ -68,7 +72,7 @@ transcribeButton.addEventListener("click", async () => {
     setStatus(error instanceof Error ? error.message : String(error), true);
   } finally {
     transcribeButton.textContent = "產生字幕";
-    transcribeButton.disabled = !selectedFile;
+    transcribeButton.disabled = !selectedFile || !hasApiKey;
   }
 });
 
@@ -222,6 +226,23 @@ function markActiveSegment() {
 function setStatus(message, isWarning = false) {
   statusText.textContent = message;
   statusText.classList.toggle("warning", isWarning);
+}
+
+async function checkHealth() {
+  try {
+    const response = await fetch("/api/health");
+    const health = await response.json();
+    hasApiKey = Boolean(health.hasApiKey);
+    keyStatus.className = `key-status ${hasApiKey ? "is-ready" : "is-missing"}`;
+    keyStatus.textContent = hasApiKey
+      ? "OpenAI API key 已設定，可以正式產生字幕"
+      : "尚未設定 OpenAI API key；可先用測試字幕模式";
+    transcribeButton.disabled = !selectedFile || !hasApiKey;
+  } catch {
+    keyStatus.className = "key-status is-missing";
+    keyStatus.textContent = "無法連線到本機服務";
+    transcribeButton.disabled = true;
+  }
 }
 
 function setProgress(label, percent, options = {}) {
