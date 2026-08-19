@@ -30,8 +30,23 @@ let activeSegmentId = null;
 let hasApiKey = false;
 let currentProjectKey = null;
 let saveTimer = null;
+let splitMode = false;
 
 checkHealth();
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Control") {
+    setSplitMode(true);
+  }
+});
+
+window.addEventListener("keyup", (event) => {
+  if (event.key === "Control") {
+    setSplitMode(false);
+  }
+});
+
+window.addEventListener("blur", () => setSplitMode(false));
 
 mediaInput.addEventListener("change", () => {
   const file = mediaInput.files?.[0];
@@ -256,6 +271,7 @@ function renderSegments() {
     timeBox.append(jumpButton, startInput, endInput);
 
     const contentBox = document.createElement("div");
+    contentBox.className = "segment-content";
     const textarea = document.createElement("textarea");
     textarea.value = segment.text;
     textarea.addEventListener("input", () => {
@@ -264,6 +280,7 @@ function renderSegments() {
       updateActiveCaption();
     });
 
+    const splitGuide = createSplitGuide(segment);
     const tools = document.createElement("div");
     tools.className = "segment-tools";
 
@@ -299,7 +316,7 @@ function renderSegments() {
 
     actions.append(splitButton, mergeButton, deleteButton);
     tools.append(duration, actions);
-    contentBox.append(textarea, tools);
+    contentBox.append(textarea, splitGuide, tools);
     item.append(timeBox, contentBox);
     segmentsList.append(item);
   }
@@ -339,6 +356,45 @@ function setProjectStatus(message) {
   projectStatus.textContent = message;
 }
 
+function setSplitMode(enabled) {
+  if (splitMode === enabled) return;
+  splitMode = enabled;
+  document.body.classList.toggle("is-split-mode", enabled);
+  if (enabled && segments.length > 0) {
+    setStatus("Ctrl 拆分模式：點字幕文字下方的小圓點即可從該字後拆分。");
+  }
+}
+
+function createSplitGuide(segment) {
+  const guide = document.createElement("div");
+  guide.className = "split-guide";
+  guide.setAttribute("aria-hidden", splitMode ? "false" : "true");
+
+  const characters = Array.from(segment.text.trim());
+  const splitPoints = characters.slice(0, -1);
+
+  for (const [index, character] of splitPoints.entries()) {
+    const slot = document.createElement("span");
+    slot.className = "split-slot";
+
+    const char = document.createElement("span");
+    char.className = "split-char";
+    char.textContent = character;
+
+    const point = document.createElement("button");
+    point.type = "button";
+    point.className = "split-point";
+    point.title = `從「${character}」後拆分`;
+    point.setAttribute("aria-label", `從第 ${index + 1} 個字後拆分`);
+    point.addEventListener("click", () => splitSegmentAtTextIndex(segment.id, index + 1));
+
+    slot.append(char, point);
+    guide.append(slot);
+  }
+
+  return guide;
+}
+
 function splitSegment(segmentId) {
   const index = segments.findIndex((segment) => segment.id === segmentId);
   if (index === -1) return;
@@ -376,6 +432,51 @@ function splitSegment(segmentId) {
   renderSegments();
   updateActiveCaption();
   setStatus(`已在 ${formatClock(splitAt)} 拆分字幕段。`);
+}
+
+function splitSegmentAtTextIndex(segmentId, characterIndex) {
+  const index = segments.findIndex((segment) => segment.id === segmentId);
+  if (index === -1) return;
+
+  const segment = segments[index];
+  const characters = Array.from(segment.text.trim());
+  if (characters.length < 2 || characterIndex <= 0 || characterIndex >= characters.length) {
+    setStatus("這個位置不能拆分。", true);
+    return;
+  }
+
+  const duration = segment.end - segment.start;
+  if (duration < 0.6) {
+    setStatus("這段太短，至少需要 0.6 秒才能拆分。", true);
+    return;
+  }
+
+  const ratio = characterIndex / characters.length;
+  const splitAt = clampTime(segment.start + duration * ratio, segment.start + 0.2, segment.end - 0.2);
+  const firstText = characters.slice(0, characterIndex).join("").trim();
+  const secondText = characters.slice(characterIndex).join("").trim();
+
+  segments.splice(
+    index,
+    1,
+    {
+      ...segment,
+      end: splitAt,
+      text: firstText,
+    },
+    {
+      id: crypto.randomUUID(),
+      index: segment.index + 1,
+      start: splitAt,
+      end: segment.end,
+      text: secondText,
+    },
+  );
+  normalizeSegmentOrder();
+  saveProjectNow();
+  renderSegments();
+  updateActiveCaption();
+  setStatus(`已從第 ${characterIndex} 個字後拆分字幕段。`);
 }
 
 function mergeWithNextSegment(segmentId) {
