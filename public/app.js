@@ -11,6 +11,7 @@ import { getSubtitleJumpTarget } from "./subtitle-navigation.js";
 import { getSubtitleInsertSlot } from "./subtitle-insert.js";
 import { parseSubtitleFile } from "./subtitle-file.js";
 import { findSubtitleMatches, replaceAllSubtitleMatches, replaceSubtitleMatch } from "./subtitle-search.js";
+import { getQualityIssueNavigationIndex } from "./quality-navigation.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -52,6 +53,8 @@ const progressBar = document.querySelector("#progressBar");
 const qualityPanel = document.querySelector("#qualityPanel");
 const qualitySummary = document.querySelector("#qualitySummary");
 const qualityList = document.querySelector("#qualityList");
+const previousIssueButton = document.querySelector("#previousIssueButton");
+const nextIssueButton = document.querySelector("#nextIssueButton");
 const maxUndoSteps = 10;
 
 let selectedFile = null;
@@ -71,6 +74,9 @@ let isDraggingNewSegment = false;
 let addSegmentPointerStart = null;
 let searchMatches = [];
 let activeSearchMatchIndex = -1;
+let qualityIssues = [];
+let activeQualityIssueIndex = -1;
+let qualityPulseTimer = null;
 
 checkHealth();
 
@@ -214,6 +220,8 @@ previousMatchButton.addEventListener("click", () => moveSearchResult(-1));
 nextMatchButton.addEventListener("click", () => moveSearchResult(1));
 replaceMatchButton.addEventListener("click", replaceCurrentSearchMatch);
 replaceAllButton.addEventListener("click", replaceAllSearchMatches);
+previousIssueButton.addEventListener("click", () => moveQualityIssue("previous"));
+nextIssueButton.addEventListener("click", () => moveQualityIssue("next"));
 
 followPlaybackInput.addEventListener("change", () => {
   followPlayback = followPlaybackInput.checked;
@@ -614,31 +622,38 @@ function renderQualityIssues() {
   qualityPanel.hidden = segments.length === 0;
   qualityList.innerHTML = "";
   clearSegmentQualityClasses();
-  if (segments.length === 0) return;
+  if (segments.length === 0) {
+    qualityIssues = [];
+    activeQualityIssueIndex = -1;
+    updateQualityIssueControls();
+    return;
+  }
 
-  const issues = getSubtitleQualityIssues(segments);
-  qualityPanel.classList.toggle("is-clean", issues.length === 0);
-  qualityPanel.classList.toggle("has-issues", issues.length > 0);
-  qualitySummary.textContent = issues.length === 0 ? "目前未發現明顯問題" : `${issues.length} 項需確認`;
+  qualityIssues = getSubtitleQualityIssues(segments);
+  if (activeQualityIssueIndex >= qualityIssues.length) activeQualityIssueIndex = qualityIssues.length > 0 ? 0 : -1;
+  qualityPanel.classList.toggle("is-clean", qualityIssues.length === 0);
+  qualityPanel.classList.toggle("has-issues", qualityIssues.length > 0);
+  updateQualityIssueControls();
 
-  for (const issue of issues) {
+  qualityIssues.forEach((issue, issueIndex) => {
     const item = document.createElement("li");
     item.className = `quality-item is-${issue.severity}`;
+    item.classList.toggle("is-active", issueIndex === activeQualityIssueIndex);
 
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = `${issue.label}：${issue.message}`;
-    button.addEventListener("click", () => jumpToSegment(issue.segmentId));
+    button.addEventListener("click", () => focusQualityIssue(issueIndex));
 
     item.append(button);
     qualityList.append(item);
     markSegmentQuality(issue.segmentId, issue.severity);
-  }
+  });
 }
 
 function clearSegmentQualityClasses() {
   for (const item of segmentsList.querySelectorAll(".segment")) {
-    item.classList.remove("has-quality-error", "has-quality-warning", "has-quality-info");
+    item.classList.remove("has-quality-error", "has-quality-warning", "has-quality-info", "is-quality-target");
   }
 }
 
@@ -647,6 +662,60 @@ function markSegmentQuality(segmentId, severity) {
   if (!item) return;
 
   item.classList.add(`has-quality-${severity}`);
+}
+
+function updateQualityIssueControls() {
+  const hasIssues = qualityIssues.length > 0;
+  previousIssueButton.disabled = !hasIssues;
+  nextIssueButton.disabled = !hasIssues;
+
+  if (!hasIssues) {
+    qualitySummary.textContent = "目前未發現明顯問題";
+    return;
+  }
+
+  qualitySummary.textContent =
+    activeQualityIssueIndex === -1 ? `${qualityIssues.length} 項需確認` : `${activeQualityIssueIndex + 1} / ${qualityIssues.length} 項需確認`;
+}
+
+function moveQualityIssue(direction) {
+  const nextIndex = getQualityIssueNavigationIndex(qualityIssues, activeQualityIssueIndex, direction);
+  if (nextIndex === -1) return;
+
+  focusQualityIssue(nextIndex);
+}
+
+function focusQualityIssue(index) {
+  const issue = qualityIssues[index];
+  if (!issue) return;
+
+  activeQualityIssueIndex = index;
+  updateQualityIssueControls();
+  markActiveQualityIssue();
+  jumpToSegment(issue.segmentId);
+  pulseSegment(issue.segmentId);
+  setStatus(`已定位品質問題：${issue.label}`);
+}
+
+function markActiveQualityIssue() {
+  for (const [index, item] of Array.from(qualityList.querySelectorAll(".quality-item")).entries()) {
+    item.classList.toggle("is-active", index === activeQualityIssueIndex);
+  }
+}
+
+function pulseSegment(segmentId) {
+  window.clearTimeout(qualityPulseTimer);
+  for (const item of segmentsList.querySelectorAll(".segment")) {
+    item.classList.remove("is-quality-target");
+  }
+
+  const item = getSegmentItem(segmentId);
+  if (!item) return;
+
+  item.classList.add("is-quality-target");
+  qualityPulseTimer = window.setTimeout(() => {
+    item.classList.remove("is-quality-target");
+  }, 1400);
 }
 
 function jumpToSegment(segmentId) {

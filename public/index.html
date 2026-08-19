@@ -97,7 +97,11 @@
             <div id="qualityPanel" class="quality-panel" hidden>
               <div class="quality-summary">
                 <strong>品質檢查</strong>
-                <span id="qualitySummary">目前未發現明顯問題</span>
+                <div class="quality-controls">
+                  <button id="previousIssueButton" class="micro-button" type="button" disabled>上一個問題</button>
+                  <button id="nextIssueButton" class="micro-button" type="button" disabled>下一個問題</button>
+                  <span id="qualitySummary">目前未發現明顯問題</span>
+                </div>
               </div>
               <ol id="qualityList" class="quality-list" aria-label="字幕品質問題"></ol>
             </div>
