@@ -454,8 +454,8 @@ body.is-split-mode .segment textarea {
     transform 120ms ease;
 }
 
-.segment .split-token:not(.is-terminal):hover,
-.segment .split-token:not(.is-terminal):focus-visible {
+.segment button.split-token:hover,
+.segment button.split-token:focus-visible {
   background: #dff4e7;
   border-color: var(--accent);
   color: var(--accent-strong);
@@ -467,9 +467,15 @@ body.is-split-mode .segment textarea {
   outline-offset: 2px;
 }
 
-.split-token.is-terminal {
+.split-token.is-leading,
+.split-token.is-punctuation {
   color: var(--muted);
   font-weight: 600;
+}
+
+.split-token.is-space {
+  min-width: 0.75em;
+  padding: 0;
 }
 
 .segment textarea:focus,

@@ -421,7 +421,7 @@ function setSplitMode(enabled) {
     guide.setAttribute("aria-hidden", enabled ? "false" : "true");
   }
   if (enabled && segments.length > 0) {
-    setStatus("Ctrl 拆分模式：文字框已暫時隱藏，移到文字上會醒目提示，點一下即可從該字後拆分。");
+    setStatus("Ctrl 拆分模式：文字框已暫時隱藏，移到文字上會醒目提示，點一下即可從該字前拆分。");
   }
 }
 
@@ -430,28 +430,71 @@ function createSplitGuide(segment) {
   guide.className = "split-guide";
   guide.setAttribute("aria-hidden", splitMode ? "false" : "true");
 
-  const characters = Array.from(segment.text.trim());
+  const units = createSplitUnits(segment.text);
 
-  for (const [index, character] of characters.entries()) {
-    if (index === characters.length - 1) {
-      const char = document.createElement("span");
-      char.className = "split-token is-terminal";
-      char.textContent = character;
-      guide.append(char);
+  for (const unit of units) {
+    if (!unit.canSplit) {
+      const token = document.createElement("span");
+      token.className = `split-token ${unit.className}`;
+      token.textContent = unit.text;
+      guide.append(token);
       continue;
     }
 
     const token = document.createElement("button");
     token.type = "button";
     token.className = "split-token";
-    token.textContent = character;
-    token.title = `從「${character}」後拆分`;
-    token.setAttribute("aria-label", `從第 ${index + 1} 個字後拆分`);
-    token.addEventListener("click", () => splitSegmentAtTextIndex(segment.id, index + 1));
+    token.textContent = unit.text;
+    token.title = `從「${unit.text}」前拆分`;
+    token.setAttribute("aria-label", `從「${unit.text}」前拆分，該文字會移到下一段`);
+    token.addEventListener("click", () => splitSegmentAtTextIndex(segment.id, unit.start));
     guide.append(token);
   }
 
   return guide;
+}
+
+function createSplitUnits(text) {
+  const characters = Array.from(text.trim());
+  const units = [];
+  let index = 0;
+
+  while (index < characters.length) {
+    const character = characters[index];
+    const start = index;
+
+    if (isWhitespace(character)) {
+      let value = character;
+      index += 1;
+      while (index < characters.length && isWhitespace(characters[index])) {
+        value += characters[index];
+        index += 1;
+      }
+      units.push({ text: value, start, canSplit: false, className: "is-space" });
+      continue;
+    }
+
+    if (isAsciiWordCharacter(character)) {
+      let value = character;
+      index += 1;
+      while (index < characters.length && isAsciiWordCharacter(characters[index])) {
+        value += characters[index];
+        index += 1;
+      }
+      units.push({ text: value, start, canSplit: start > 0, className: start === 0 ? "is-leading" : "" });
+      continue;
+    }
+
+    index += 1;
+    units.push({
+      text: character,
+      start,
+      canSplit: start > 0 && !isPunctuation(character),
+      className: start === 0 ? "is-leading" : isPunctuation(character) ? "is-punctuation" : "",
+    });
+  }
+
+  return units;
 }
 
 function splitSegment(segmentId) {
@@ -466,9 +509,12 @@ function splitSegment(segmentId) {
   }
 
   const playhead = mediaPlayer.currentTime || 0;
+  const [firstText, secondText, secondTextStartIndex] = splitText(segment.text);
+  const inferredSplitAt = segment.start + duration * estimateSpeechProgressRatio(segment.text, secondTextStartIndex);
   const splitAt =
-    playhead > segment.start + 0.2 && playhead < segment.end - 0.2 ? playhead : segment.start + duration / 2;
-  const [firstText, secondText] = splitText(segment.text);
+    playhead > segment.start + 0.2 && playhead < segment.end - 0.2
+      ? playhead
+      : clampTime(inferredSplitAt, segment.start + 0.2, segment.end - 0.2);
 
   pushUndoSnapshot("拆分字幕段");
   segments.splice(
@@ -511,7 +557,7 @@ function splitSegmentAtTextIndex(segmentId, characterIndex) {
     return;
   }
 
-  const ratio = characterIndex / characters.length;
+  const ratio = estimateSpeechProgressRatio(segment.text, characterIndex);
   const splitAt = clampTime(segment.start + duration * ratio, segment.start + 0.2, segment.end - 0.2);
   const firstText = characters.slice(0, characterIndex).join("").trim();
   const secondText = characters.slice(characterIndex).join("").trim();
@@ -537,7 +583,61 @@ function splitSegmentAtTextIndex(segmentId, characterIndex) {
   saveProjectNow();
   renderSegments();
   updateActiveCaption();
-  setStatus(`已從第 ${characterIndex} 個字後拆分字幕段。`);
+  setStatus("已從點選文字前拆分字幕段，點選的文字已移到下一段。");
+}
+
+function estimateSpeechProgressRatio(text, splitIndex) {
+  const units = createSpeechWeightUnits(text);
+  const totalWeight = units.reduce((sum, unit) => sum + unit.weight, 0);
+  if (totalWeight <= 0) return 0.5;
+
+  const elapsedWeight = units.reduce((sum, unit) => {
+    if (unit.end <= splitIndex) return sum + unit.weight;
+    if (unit.start >= splitIndex) return sum;
+
+    const partialRatio = (splitIndex - unit.start) / Math.max(1, unit.end - unit.start);
+    return sum + unit.weight * partialRatio;
+  }, 0);
+
+  return clampTime(elapsedWeight / totalWeight, 0.08, 0.92);
+}
+
+function createSpeechWeightUnits(text) {
+  const characters = Array.from(text.trim());
+  const units = [];
+  let index = 0;
+
+  while (index < characters.length) {
+    const character = characters[index];
+    const start = index;
+
+    if (isWhitespace(character)) {
+      let length = 1;
+      index += 1;
+      while (index < characters.length && isWhitespace(characters[index])) {
+        length += 1;
+        index += 1;
+      }
+      units.push({ start, end: index, weight: 0.08 * length });
+      continue;
+    }
+
+    if (isAsciiWordCharacter(character)) {
+      let length = 1;
+      index += 1;
+      while (index < characters.length && isAsciiWordCharacter(characters[index])) {
+        length += 1;
+        index += 1;
+      }
+      units.push({ start, end: index, weight: Math.max(1.15, length * 0.22) });
+      continue;
+    }
+
+    index += 1;
+    units.push({ start, end: index, weight: isPunctuation(character) ? 0.18 : 1 });
+  }
+
+  return units;
 }
 
 function mergeWithNextSegment(segmentId) {
@@ -561,7 +661,7 @@ function mergeWithNextSegment(segmentId) {
 
 function splitText(text) {
   const trimmed = text.trim();
-  if (trimmed.length < 2) return [trimmed, "新增字幕"];
+  if (trimmed.length < 2) return [trimmed, "新增字幕", 1];
 
   const midpoint = Math.ceil(trimmed.length / 2);
   const punctuation = ["，", "。", "、", "；", ",", ".", ";", " "];
@@ -571,7 +671,19 @@ function splitText(text) {
     .sort((left, right) => Math.abs(left - midpoint) - Math.abs(right - midpoint))[0];
 
   const index = splitIndex ?? midpoint;
-  return [trimmed.slice(0, index + 1).trim(), trimmed.slice(index + 1).trim() || "新增字幕"];
+  return [trimmed.slice(0, index + 1).trim(), trimmed.slice(index + 1).trim() || "新增字幕", index + 1];
+}
+
+function isWhitespace(character) {
+  return /\s/.test(character);
+}
+
+function isAsciiWordCharacter(character) {
+  return /^[A-Za-z0-9'-]$/.test(character);
+}
+
+function isPunctuation(character) {
+  return /^[，。、「」『』；：？！,.!?;:()[\]{}"“”‘’]$/.test(character);
 }
 
 function normalizeSegmentOrder() {
