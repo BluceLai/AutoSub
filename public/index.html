@@ -83,6 +83,13 @@
               <button class="micro-button" type="button" data-shift-all="0.1" disabled>+0.1s</button>
               <button class="micro-button" type="button" data-shift-all="0.5" disabled>+0.5s</button>
             </div>
+            <div id="qualityPanel" class="quality-panel" hidden>
+              <div class="quality-summary">
+                <strong>品質檢查</strong>
+                <span id="qualitySummary">目前未發現明顯問題</span>
+              </div>
+              <ol id="qualityList" class="quality-list" aria-label="字幕品質問題"></ol>
+            </div>
             <div id="emptyState" class="empty-state">
               選擇檔案後按「產生字幕」，這裡會出現可編輯的字幕段落。
             </div>

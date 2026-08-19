@@ -1,4 +1,5 @@
 import { createSplitUnits, estimateSpeechProgressRatio, splitText } from "./subtitle-text.js";
+import { getSubtitleQualityIssues } from "./subtitle-quality.js";
 
 const mediaInput = document.querySelector("#mediaInput");
 const mediaPlayer = document.querySelector("#mediaPlayer");
@@ -28,6 +29,9 @@ const progressLabel = document.querySelector("#progressLabel");
 const progressPercent = document.querySelector("#progressPercent");
 const progressTrack = document.querySelector(".progress-track");
 const progressBar = document.querySelector("#progressBar");
+const qualityPanel = document.querySelector("#qualityPanel");
+const qualitySummary = document.querySelector("#qualitySummary");
+const qualityList = document.querySelector("#qualityList");
 const maxUndoSteps = 10;
 
 let selectedFile = null;
@@ -333,6 +337,7 @@ function renderSegments() {
       segment.text = textarea.value;
       scheduleSaveProject();
       updateActiveCaption();
+      renderQualityIssues();
     });
     textarea.addEventListener("blur", () => {
       if (textEditSnapshotSegmentId === segment.id) {
@@ -384,6 +389,7 @@ function renderSegments() {
   }
 
   markActiveSegment();
+  renderQualityIssues();
 }
 
 function createTimeInput(value, onChange) {
@@ -402,6 +408,54 @@ function createNudgeButton(label, segmentId, delta) {
   button.title = `${delta > 0 ? "延後" : "提前"}這段字幕 ${Math.abs(delta).toFixed(1)} 秒`;
   button.addEventListener("click", () => shiftSegment(segmentId, delta));
   return button;
+}
+
+function renderQualityIssues() {
+  qualityPanel.hidden = segments.length === 0;
+  qualityList.innerHTML = "";
+  clearSegmentQualityClasses();
+  if (segments.length === 0) return;
+
+  const issues = getSubtitleQualityIssues(segments);
+  qualityPanel.classList.toggle("is-clean", issues.length === 0);
+  qualityPanel.classList.toggle("has-issues", issues.length > 0);
+  qualitySummary.textContent = issues.length === 0 ? "目前未發現明顯問題" : `${issues.length} 項需確認`;
+
+  for (const issue of issues) {
+    const item = document.createElement("li");
+    item.className = `quality-item is-${issue.severity}`;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${issue.label}：${issue.message}`;
+    button.addEventListener("click", () => jumpToSegment(issue.segmentId));
+
+    item.append(button);
+    qualityList.append(item);
+    markSegmentQuality(issue.segmentId, issue.severity);
+  }
+}
+
+function clearSegmentQualityClasses() {
+  for (const item of segmentsList.querySelectorAll(".segment")) {
+    item.classList.remove("has-quality-error", "has-quality-warning", "has-quality-info");
+  }
+}
+
+function markSegmentQuality(segmentId, severity) {
+  const item = Array.from(segmentsList.querySelectorAll(".segment")).find((candidate) => candidate.dataset.id === segmentId);
+  if (!item) return;
+
+  item.classList.add(`has-quality-${severity}`);
+}
+
+function jumpToSegment(segmentId) {
+  const segment = segments.find((candidate) => candidate.id === segmentId);
+  if (!segment) return;
+
+  mediaPlayer.currentTime = Math.max(0, segment.start);
+  activeSegmentId = segment.id;
+  updateActiveCaption({ forceScroll: true });
 }
 
 function updateActiveCaption(options = {}) {
